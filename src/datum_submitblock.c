@@ -34,6 +34,8 @@
  */
 
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <time.h>
@@ -63,9 +65,45 @@ void preciousblock(CURL *curl, char *blockhash) {
 	return;
 }
 
+static void *datum_dump_submitblock_thread(void *arg) {
+	char *s = (char *)arg;
+	const char *path = datum_config.mining_dump_submitblock_path;
+	FILE *f;
+	if (!s) return NULL;
+	if (path[0]) {
+		f = fopen(path, "w");
+		if (f) {
+			fputs(s, f);
+			fputc('\n', f);
+			fclose(f);
+			DLOG_INFO("Full submitblock request written to %s", path);
+		} else {
+			DLOG_WARN("Could not write submitblock dump to %s: %s", path, strerror(errno));
+		}
+	}
+	free(s);
+	return NULL;
+}
+
+static void datum_dump_submitblock_async(const char *submitblock_req) {
+	char *req_copy;
+	pthread_t dump_thread;
+	pthread_attr_t attr;
+	if (!submitblock_req || !datum_config.mining_dump_submitblock_path[0]) return;
+	req_copy = strdup(submitblock_req);
+	if (!req_copy) return;
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	if (pthread_create(&dump_thread, &attr, datum_dump_submitblock_thread, req_copy) != 0) {
+		free(req_copy);
+	}
+	pthread_attr_destroy(&attr);
+}
+
 void datum_submitblock_doit(CURL *tcurl, char *url, const char *submitblock_req, const char *block_hash_hex) {
 	json_t *r;
 	char *s = NULL;
+	datum_dump_submitblock_async(submitblock_req);
 	// TODO: Move these types of things to the conf file
 	if (!url) {
 		r = bitcoind_json_rpc_call(tcurl, &datum_config, submitblock_req);

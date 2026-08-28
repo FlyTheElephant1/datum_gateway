@@ -267,3 +267,14 @@ json_t *bitcoind_json_rpc_call(CURL * const curl, global_config_t * const cfg, c
 	if (!update_rpc_cookie(cfg)) return NULL;
 	return json_rpc_call(curl, cfg->bitcoind_rpcurl, cfg->bitcoind_rpcuserpass, rpc_req);
 }
+
+json_t *bitcoind_json_rpc_call_unchecked(CURL * const curl, global_config_t * const cfg, const char * const rpc_req) {
+	long http_resp_code = -1;
+	/* extra_header disables the "null result = failure" filter in json_rpc_call_full */
+	json_t *j = json_rpc_call_full(curl, cfg->bitcoind_rpcurl, cfg->bitcoind_rpcuserpass, rpc_req, "X-Datum-Unchecked: 1", &http_resp_code);
+	if (j) return j;
+	if (cfg->bitcoind_rpcuser[0]) return NULL;
+	if (http_resp_code != 401) return NULL;
+	if (!update_rpc_cookie(cfg)) return NULL;
+	return json_rpc_call_full(curl, cfg->bitcoind_rpcurl, cfg->bitcoind_rpcuserpass, rpc_req, "X-Datum-Unchecked: 1", NULL);
+}
