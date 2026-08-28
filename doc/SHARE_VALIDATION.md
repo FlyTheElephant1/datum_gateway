@@ -35,19 +35,21 @@ That calls `TestBlockValidity(..., check_pow=false)`.
   "dump_submitblock_path": "",
   "validate_shares_on_node": true,
   "share_node_check": "proposal",
-  "share_node_check_every": 16
+  "share_node_check_every": 16,
+  "share_node_check_missingzeros": -1
 }
 ```
 
 | key | default | meaning |
 |---|---|---|
-| `logger.log_shares` | false | INFO line per share: accepted/rejected + reason |
+| `logger.log_shares` | false | INFO line per accepted/rejected share that passes the missingzeros gate + `missingzeros` (leading bits short of the block target; `0` is a block candidate) |
 | `logger.debug_blake2b_pow` | false | INFO dump of BLAKE2b H1 (119 bytes) and final LE hash |
 | `mining.blake2b_force_version_high_bit` | true | OR `0x80000000` onto header/H1 version. Leave **true** unless `job` version already has the v2 bit *and* GBT did not strip it (the common GBT path clears `0x80000000` from `version` before serialization). |
 | `mining.dump_submitblock_path` | `""` | If set, write each submitblock JSON to this file (detached thread) |
 | `mining.validate_shares_on_node` | false | Ask the node about sampled accepted shares |
 | `mining.share_node_check` | `"proposal"` | `"proposal"` skips PoW; `"submitblock"` checks PoW first |
 | `mining.share_node_check_every` | 16 | Only 1 of every N accepted shares is *considered*. At most one node-check RPC is in flight at a time; others are skipped. Blocks are always submitted separately. |
+| `mining.share_node_check_missingzeros` | -1 | `-1` = infinity (log every share; use `share_node_check_every`). `>= 0` overrides that sampler and the share log: only print SHARE / node-check lines when `missingzeros <=` this value. `2` ≈ 4 per block, `4` ≈ 16. |
 
 Recommended solo-debug set:
 
@@ -58,14 +60,15 @@ Recommended solo-debug set:
   "dump_submitblock_path": "/tmp/datum_last_submitblock.json",
   "validate_shares_on_node": true,
   "share_node_check": "proposal",
-  "share_node_check_every": 1
+  "share_node_check_missingzeros": 2
 }
 ```
 
 Then look for:
 
 ```
-SHARE accepted user=... host=... reason=ok diff=...
+SHARE accepted user=... host=... reason=ok diff=... missingzeros=2
+SHARE accepted user=... host=... reason=block diff=... missingzeros=0
 SHARE node-check user=... mode=proposal diff=... => null (structurally valid; PoW not required for proposal)
 ```
 

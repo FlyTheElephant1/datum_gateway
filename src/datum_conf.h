@@ -135,6 +135,7 @@ typedef struct {
 	bool mining_validate_shares_on_node;
 	char mining_share_node_check[16];
 	int mining_share_node_check_every;
+	int mining_share_node_check_missingzeros;
 	int coinbase_unique_id;
 	
 	char api_admin_password[72];

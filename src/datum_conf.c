@@ -142,6 +142,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = datum_config.mining_share_node_check,				.default_string[0] = "proposal", .max_string_len = sizeof(datum_config.mining_share_node_check) },
 	{ .var_type = DATUM_CONF_INT, 		.category = "mining", 		.name = "share_node_check_every",	.description = "Validate 1 of every N accepted shares on the node (1 = every share). Real blocks are always submitted separately.",
 		.required = false, .ptr = &datum_config.mining_share_node_check_every, 		.default_int = 16 },
+	{ .var_type = DATUM_CONF_INT, 		.category = "mining", 		.name = "share_node_check_missingzeros",	.description = "If >= 0, only log SHARE lines and node-check shares with missingzeros <= this value (overrides share_node_check_every). -1 = infinity (log all, use every-N). 2 ≈ 4 near-block shares per block; 4 ≈ 16.",
+		.required = false, .ptr = &datum_config.mining_share_node_check_missingzeros, 	.default_int = -1 },
 	
 	// API/dashboard
 	{ .var_type = DATUM_CONF_STRING, 	.category = "api",	 		.name = "admin_password",			.description = "API password for actions/changes (username 'admin'; disabled if blank)",
