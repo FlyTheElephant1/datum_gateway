@@ -763,13 +763,44 @@ static unsigned datum_leading_zero_bits_le(const unsigned char *hash_le)
 }
 
 /* Bits the hash is short of the block target. 0 = candidate / met target. */
+/* Divide a 256-bit LE integer (index 0 = LSB) by 2^k. */
+static void datum_shr_le256(unsigned char *h, unsigned k)
+{
+	unsigned bytes, bits, i, v, carry, mask;
+	if (!h || k == 0) return;
+	if (k >= 256) {
+		memset(h, 0, 32);
+		return;
+	}
+	bytes = k / 8;
+	bits = k % 8;
+	if (bytes) {
+		memmove(h, h + bytes, 32 - bytes);
+		memset(h + (32 - bytes), 0, bytes);
+	}
+	if (!bits) return;
+	mask = (1u << bits) - 1u;
+	carry = 0;
+	for (i = 31; i != (unsigned)-1; i--) {
+		v = h[i];
+		h[i] = (unsigned char)((v >> bits) | carry);
+		carry = (v & mask) << (8 - bits);
+	}
+}
 static unsigned datum_missing_block_zero_bits(const unsigned char *share_hash_le, const unsigned char *block_target_le, bool meets_block_target)
 {
-	unsigned have, need;
+	unsigned char h[32];
+	unsigned lz_h, lz_t, k;
 	if (meets_block_target) return 0;
-	have = datum_leading_zero_bits_le(share_hash_le);
-	need = datum_leading_zero_bits_le(block_target_le);
-	return (need > have) ? (need - have) : 0;
+	if (!share_hash_le || !block_target_le) return 0;
+	if (compare_hashes(share_hash_le, block_target_le) <= 0) return 0;
+	lz_h = datum_leading_zero_bits_le(share_hash_le);
+	lz_t = datum_leading_zero_bits_le(block_target_le);
+	k = (lz_t > lz_h) ? (lz_t - lz_h) : 0;
+	memcpy(h, share_hash_le, 32);
+	datum_shr_le256(h, k);
+	if (compare_hashes(h, block_target_le) <= 0) return k;
+	return k + 1;
 }
 
 static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *username, bool accepted, const char *reason, uint64_t diff, int missing_zeros)
