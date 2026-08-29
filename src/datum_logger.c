@@ -85,6 +85,8 @@ static int datum_console_job_kind(const char *msg)
 	if (!msg) return 0;
 	if (!strncmp(msg, "Updating standard stratum job for block", 39)) return 1;
 	if (!strncmp(msg, "Updating priority stratum job for block", 39)) return 2;
+	if (!strcmp(msg, "NEW NETWORK BLOCK NOTIFICATION RECEIVED")) return 3;
+	if (!strncmp(msg, "NEW NETWORK BLOCK:", 18)) return 4;
 	return 0;
 }
 
@@ -124,7 +126,37 @@ static void datum_console_write(FILE *out, const char *line_with_nl, const char 
 		return;
 	}
 
-	if (console_collapse_kind == kind && console_collapse_count > 0) {
+	/* Notification lines stack; the following NEW NETWORK BLOCK line eats them. */
+	if (kind == 4 && console_collapse_kind == 3 && console_collapse_count > 0) {
+		char base[1200];
+		size_t n;
+		snprintf(base, sizeof(base), "%s", line_with_nl);
+		n = strlen(base);
+		if (n && base[n-1] == '\n') base[--n] = 0;
+		{
+			const char *colon = strstr(base, ": ");
+			if (colon) {
+				size_t pre = (size_t)(colon + 2 - base);
+				snprintf(rebuilt, sizeof(rebuilt), "%.*sx%d NOTIFICATION + %s", (int)pre, base, console_collapse_count, colon + 2);
+			} else {
+				snprintf(rebuilt, sizeof(rebuilt), "x%d NOTIFICATION + %s", console_collapse_count, base);
+			}
+		}
+		if (!console_collapse_open) {
+			fputs("\033[1A\r", out);
+		} else {
+			fputc('\r', out);
+		}
+		fputs(rebuilt, out);
+		fputs("\033[K", out);
+		fflush(out);
+		console_collapse_kind = 4;
+		console_collapse_count = 1;
+		console_collapse_open = 1;
+		return;
+	}
+
+	if (console_collapse_kind == kind && console_collapse_count > 0 && kind != 4) {
 		const char *colon;
 		console_collapse_count++;
 		colon = strstr(line_with_nl, ": ");
