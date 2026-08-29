@@ -157,6 +157,7 @@ typedef struct {
 	bool clog_calling_function;
 	bool clog_to_stderr;
 	bool clog_rotate_daily;
+	bool clog_console_collapse_jobs;
 	char clog_file[1024];
 	bool logger_log_shares;
 	bool logger_debug_blake2b_pow;
