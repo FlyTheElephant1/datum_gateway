@@ -134,7 +134,7 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = datum_config.mining_pow_algorithm,				.default_string[0] = "auto", .max_string_len = sizeof(datum_config.mining_pow_algorithm) },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "mining", 		.name = "blake2b_force_version_high_bit",	.description = "OR 0x80000000 onto the BLAKE2b header/H1 version. Set false if your node already supplies the header-v2 bit and extra OR causes high-hash.",
 		.required = false, .ptr = &datum_config.mining_blake2b_force_version_high_bit, 		.default_bool = true },
-	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "dump_submitblock_path",	.description = "If set, write each submitblock JSON-RPC request to this file (non-blocking). Empty disables.",
+	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "dump_submitblock_path",	.description = "If set, write each submitblock JSON-RPC request (non-blocking). A filename is replaced with datum_submitblock_<height>_<last4hash>.json in that directory; a path ending in / is used as the directory. Empty disables.",
 		.required = false, .ptr = datum_config.mining_dump_submitblock_path,			.default_string[0] = "", .max_string_len = sizeof(datum_config.mining_dump_submitblock_path) },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "mining", 		.name = "validate_shares_on_node",	.description = "Send sampled accepted shares to the local node for structural validation (does not require block-level PoW).",
 		.required = false, .ptr = &datum_config.mining_validate_shares_on_node, 		.default_bool = false },

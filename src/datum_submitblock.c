@@ -34,6 +34,8 @@
  */
 
 #include <string.h>
+#include <inttypes.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -52,6 +54,43 @@ pthread_cond_t submitblock_cond = PTHREAD_COND_INITIALIZER;
 int submit_block_triggered = 0;
 const char *submitblock_ptr = NULL;
 char submitblock_hash[256] = { 0 };
+uint64_t submitblock_height = 0;
+
+void datum_submitblock_note_height(uint64_t height) {
+	submitblock_height = height;
+}
+
+static void datum_dump_submitblock_build_path(char *out, size_t outsz, const char *cfg, const char *hash_hex, uint64_t height)
+{
+	char dir[512];
+	size_t n;
+	const char *slash;
+	const char *last4 = "0000";
+	size_t hl;
+	if (!out || !outsz) return;
+	out[0] = 0;
+	if (!cfg || !cfg[0]) return;
+	n = strlen(cfg);
+	if (cfg[n - 1] == '/') {
+		if (n >= sizeof(dir)) return;
+		memcpy(dir, cfg, n + 1);
+	} else {
+		slash = strrchr(cfg, '/');
+		if (!slash) {
+			strcpy(dir, "./");
+		} else {
+			size_t dlen = (size_t)(slash - cfg + 1);
+			if (dlen >= sizeof(dir)) return;
+			memcpy(dir, cfg, dlen);
+			dir[dlen] = 0;
+		}
+	}
+	if (hash_hex) {
+		hl = strlen(hash_hex);
+		if (hl >= 4) last4 = hash_hex + hl - 4;
+	}
+	snprintf(out, outsz, "%sdatum_submitblock_%" PRIu64 "_%s.json", dir, height, last4);
+}
 
 void preciousblock(CURL *curl, char *blockhash) {
 	json_t *json;
@@ -67,9 +106,10 @@ void preciousblock(CURL *curl, char *blockhash) {
 
 static void *datum_dump_submitblock_thread(void *arg) {
 	char *s = (char *)arg;
-	const char *path = datum_config.mining_dump_submitblock_path;
+	char path[512];
 	FILE *f;
 	if (!s) return NULL;
+	datum_dump_submitblock_build_path(path, sizeof(path), datum_config.mining_dump_submitblock_path, submitblock_hash, submitblock_height);
 	if (path[0]) {
 		f = fopen(path, "w");
 		if (f) {

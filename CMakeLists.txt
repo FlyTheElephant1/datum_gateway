@@ -138,6 +138,12 @@ add_custom_target(generate_git_version
 )
 add_dependencies(datum_gateway generate_git_version)
 
+add_executable(logUnroll src/logunroll.c)
+set_target_properties(logUnroll PROPERTIES OUTPUT_NAME logUnroll)
+add_dependencies(logUnroll generate_git_version)
+target_include_directories(logUnroll PRIVATE $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}>)
+install(TARGETS logUnroll DESTINATION bin)
+
 add_custom_command(
 	OUTPUT web_resources.h
 	COMMAND ${CMAKE_COMMAND} "-DINPUT_FILES=${WEB_RESOURCES}" -DOUTPUT_FILE=web_resources.h -DSOURCE_DIR=${PROJECT_SOURCE_DIR} -P ${PROJECT_SOURCE_DIR}/cmake/script/EmbedResources.cmake

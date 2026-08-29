@@ -626,6 +626,7 @@ void *datum_gateway_template_thread(void *args) {
 				
 				if (t) {
 					datum_blocktemplates_error = NULL;
+					datum_logger_note_height(t->height);
 					DLOG_DEBUG("height: %lu / value: %"PRIu64, (unsigned long)t->height, t->coinbasevalue);
 					DLOG_DEBUG("--- prevhash: %s", t->previousblockhash);
 					DLOG_DEBUG("--- txn_count: %u / sigops: %u / weight: %u / size: %u", t->txn_count, t->txn_total_sigops, t->txn_total_weight, t->txn_total_size);

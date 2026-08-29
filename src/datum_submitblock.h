@@ -36,8 +36,11 @@
 #ifndef _DATUM_SUBMITBLOCK_H_
 #define _DATUM_SUBMITBLOCK_H_
 
+#include <stdint.h>
+
 void datum_submitblock_init(void);
 void datum_submitblock_trigger(const char *ptr, const char *hash);
+void datum_submitblock_note_height(uint64_t height);
 void datum_submitblock_waitfree(void);
 void datum_submitblock_tests(void);
 

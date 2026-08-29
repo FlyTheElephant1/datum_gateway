@@ -51,9 +51,17 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include <errno.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <windows.h>
+#ifndef SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+#define SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE 0x2
+#endif
+#endif
 
 #include "datum_logger.h"
 #include "datum_utils.h"
+#include "datum_gateway.h"
 
 const char *level_text[] = { "  ALL", "DEBUG", " INFO", " WARN", "ERROR", "FATAL" };
 
@@ -69,6 +77,214 @@ bool log_calling_function = true;
 bool log_to_stderr = false;
 bool log_rotate_daily = true;
 char log_file[1024] = { 0 };
+static char log_file_configured[1024] = { 0 };
+static volatile uint64_t log_chain_height = 0;
+static volatile bool log_switch_requested = false;
+static bool log_named_active = false;
+
+static const char *datum_logger_commit_last4(void)
+{
+	static char last4[5];
+	const char *h = GIT_COMMIT_HASH;
+	size_t n;
+	if (!h || !h[0]) return "unkn";
+	n = strlen(h);
+	if (n >= 4) h += n - 4;
+	snprintf(last4, sizeof(last4), "%s", h);
+	return last4;
+}
+
+static void datum_logger_dir_of(const char *path, char *dir, size_t dirsz)
+{
+	const char *slash;
+	size_t dlen;
+	if (!path || !dir || !dirsz) return;
+	dir[0] = 0;
+	slash = strrchr(path, '/');
+#ifdef _WIN32
+	{
+		const char *bslash = strrchr(path, '\\');
+		if (!slash || (bslash && bslash > slash)) slash = bslash;
+	}
+#endif
+	if (!slash) {
+		snprintf(dir, dirsz, "./");
+		return;
+	}
+	dlen = (size_t)(slash - path + 1);
+	if (dlen >= dirsz) dlen = dirsz - 1;
+	memcpy(dir, path, dlen);
+	dir[dlen] = 0;
+}
+
+static int datum_logger_copy_file(const char *src, const char *dst)
+{
+	FILE *in, *out;
+	char buf[8192];
+	size_t n;
+	if (!src || !dst || !src[0] || !dst[0]) return -1;
+	in = fopen(src, "rb");
+	if (!in) return -1;
+	out = fopen(dst, "wb");
+	if (!out) {
+		fclose(in);
+		return -1;
+	}
+	while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+		if (fwrite(buf, 1, n, out) != n) {
+			fclose(in);
+			fclose(out);
+			return -1;
+		}
+	}
+	fclose(in);
+	fclose(out);
+	return 0;
+}
+
+static int datum_logger_replace_with_symlink(const char *linkpath, const char *target)
+{
+	const char *slash;
+	const char *rel = target;
+	if (!linkpath || !target || !linkpath[0] || !target[0]) return -1;
+	slash = strrchr(target, '/');
+#ifdef _WIN32
+	{
+		const char *bslash = strrchr(target, '\\');
+		if (!slash || (bslash && bslash > slash)) slash = bslash;
+	}
+#endif
+	if (slash) rel = slash + 1;
+#ifdef _WIN32
+	DeleteFileA(linkpath);
+	if (!CreateSymbolicLinkA(linkpath, rel, SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+		if (!CreateSymbolicLinkA(linkpath, rel, 0)) return -1;
+	}
+	return 0;
+#else
+	unlink(linkpath);
+	return symlink(rel, linkpath);
+#endif
+}
+
+static void datum_logger_build_named_path(char *out, size_t outsz, uint64_t height, const char *date_suffix)
+{
+	char dir[1024];
+	datum_logger_dir_of(log_file_configured[0] ? log_file_configured : log_file, dir, sizeof(dir));
+	if (date_suffix && date_suffix[0]) {
+		snprintf(out, outsz, "%sdatum_log_%" PRIu64 "_%s_%s.log", dir, height, datum_logger_commit_last4(), date_suffix);
+	} else {
+		snprintf(out, outsz, "%sdatum_log_%" PRIu64 "_%s.log", dir, height, datum_logger_commit_last4());
+	}
+}
+
+void datum_logger_note_height(uint64_t height)
+{
+	if (!height) return;
+	log_chain_height = height;
+	if (!log_named_active) log_switch_requested = true;
+}
+
+#ifdef _WIN32
+#define DATUM_LOGUNROLL_BIN "logUnroll.exe"
+#define datum_popen(c,m) _popen(c,m)
+#define datum_pclose(f) _pclose(f)
+#else
+#define DATUM_LOGUNROLL_BIN "logUnroll"
+#define datum_popen(c,m) popen(c,m)
+#define datum_pclose(f) pclose(f)
+#endif
+
+static int datum_logger_exe_dir(const char *argv0, char *out, size_t outsz)
+{
+	char tmp[1024];
+	const char *slash;
+	tmp[0] = 0;
+#ifndef _WIN32
+	{
+		ssize_t n = readlink("/proc/self/exe", tmp, sizeof(tmp) - 1);
+		if (n > 0) tmp[n] = 0;
+	}
+#endif
+	if (!tmp[0] && argv0) snprintf(tmp, sizeof(tmp), "%s", argv0);
+	if (!tmp[0]) return -1;
+	slash = strrchr(tmp, '/');
+#ifdef _WIN32
+	{
+		const char *b = strrchr(tmp, '\\');
+		if (!slash || (b && b > slash)) slash = b;
+	}
+#endif
+	if (!slash) {
+		snprintf(out, outsz, ".");
+		return 0;
+	}
+	{
+		size_t n = (size_t)(slash - tmp);
+		if (n >= outsz) n = outsz - 1;
+		memcpy(out, tmp, n);
+		out[n] = 0;
+	}
+	return 0;
+}
+
+static int datum_logger_bin_commit(const char *path, char *out, size_t outsz)
+{
+	char cmd[1200];
+	FILE *f;
+	size_t n;
+	if (!path || !out || !outsz) return -1;
+	out[0] = 0;
+	snprintf(cmd, sizeof(cmd), "\"%s\" --commit", path);
+	f = datum_popen(cmd, "r");
+	if (!f) return -1;
+	if (!fgets(out, (int)outsz, f)) {
+		datum_pclose(f);
+		return -1;
+	}
+	datum_pclose(f);
+	n = strlen(out);
+	while (n && (out[n-1] == '\n' || out[n-1] == '\r')) out[--n] = 0;
+	return out[0] ? 0 : -1;
+}
+
+void datum_logger_install_logunroll(const char *argv0)
+{
+	char logdir[1024];
+	char src[1200];
+	char dst[1200];
+	char have[160];
+	const char *cfg = log_file_configured[0] ? log_file_configured : log_file;
+	if (!cfg || !cfg[0]) return;
+	datum_logger_dir_of(cfg, logdir, sizeof(logdir));
+	if (!logdir[0]) return;
+	if (datum_logger_exe_dir(argv0, src, sizeof(src)) != 0) return;
+	{
+		size_t n = strlen(src);
+		snprintf(src + n, sizeof(src) - n, "/%s", DATUM_LOGUNROLL_BIN);
+	}
+	snprintf(dst, sizeof(dst), "%s%s", logdir, DATUM_LOGUNROLL_BIN);
+	{
+		FILE *probe = fopen(src, "rb");
+		if (!probe) {
+			DLOG_DEBUG("logUnroll not found next to gateway (%s)", src);
+			return;
+		}
+		fclose(probe);
+	}
+	if (datum_logger_bin_commit(dst, have, sizeof(have)) == 0 && strcmp(have, GIT_COMMIT_HASH) == 0) {
+		DLOG_DEBUG("logUnroll in log folder is current (%s)", have);
+		return;
+	}
+	if (datum_logger_copy_file(src, dst) != 0) {
+		DLOG_WARN("Could not install %s -> %s: %s", src, dst, strerror(errno));
+		return;
+	}
+#ifndef _WIN32
+	chmod(dst, 0755);
+#endif
+	DLOG_INFO("Installed %s to log folder (git %s)", DATUM_LOGUNROLL_BIN, GIT_COMMIT_HASH);
+}
 
 int dlog_queue_max_entries = 0;
 int msg_buf_maxsz = DLOG_MSG_BUF_SIZE;
@@ -104,6 +320,8 @@ void datum_logger_config(
 	log_rotate_daily = clog_rotate_daily;
 	strncpy(log_file, clog_file, 1023);
 	log_file[1023] = 0;
+	strncpy(log_file_configured, clog_file, 1023);
+	log_file_configured[1023] = 0;
 	
 	if (log_level_console < 0) log_level_console = 0;
 	if (log_level_console > DLOG_LEVEL_FATAL) log_level_console = DLOG_LEVEL_FATAL;
@@ -282,6 +500,15 @@ void * datum_logger_thread(void *ptr) {
 	dlog_queue[1] = &dlog_queue[0][dlog_queue_max_entries];
 	
 	if ((log_to_file) && (log_file[0] != 0)) {
+#ifndef _WIN32
+		{
+			struct stat st;
+			if (lstat(log_file, &st) == 0 && S_ISLNK(st.st_mode)) {
+				/* Previous run left a symlink; start a fresh bootstrap file. */
+				unlink(log_file);
+			}
+		}
+#endif
 		log_handle = fopen(log_file,"a");
 		if (!log_handle) {
 			DLOG(DLOG_LEVEL_FATAL, "Could not open log file (%s): %s!", log_file, strerror(errno));
@@ -391,6 +618,37 @@ void * datum_logger_thread(void *ptr) {
 			}
 		}
 		
+		if (log_switch_requested && log_to_file && log_handle && log_chain_height) {
+			char dest[1024];
+			log_switch_requested = false;
+			datum_logger_build_named_path(dest, sizeof(dest), log_chain_height, NULL);
+			if (dest[0] && strcmp(dest, log_file)) {
+				fflush(log_handle);
+				fclose(log_handle);
+				log_handle = NULL;
+				if (datum_logger_copy_file(log_file, dest) != 0) {
+					DLOG(DLOG_LEVEL_ERROR, "Could not copy log %s -> %s: %s", log_file, dest, strerror(errno));
+					log_handle = fopen(log_file, "a");
+				} else {
+					strncpy(log_file, dest, 1023);
+					log_file[1023] = 0;
+					if (log_file_configured[0] && datum_logger_replace_with_symlink(log_file_configured, dest) != 0) {
+						DLOG(DLOG_LEVEL_WARN, "Could not symlink %s -> %s: %s", log_file_configured, dest, strerror(errno));
+					}
+					log_named_active = true;
+					log_handle = fopen(log_file, "a");
+					DLOG(DLOG_LEVEL_INFO, "Log file switched to %s", dest);
+				}
+				if (!log_handle) {
+					DLOG(DLOG_LEVEL_FATAL, "Could not reopen log file after switch: %s", strerror(errno));
+					panic_from_thread(__LINE__);
+				}
+				log_file_opened = time(NULL);
+			} else {
+				log_named_active = true;
+			}
+		}
+
 		if (log_reopen_signal && log_to_file && log_handle) {
 			log_reopen_signal = false;
 			DLOG(DLOG_LEVEL_DEBUG, "Reopening log file");
@@ -411,12 +669,26 @@ void * datum_logger_thread(void *ptr) {
 				
 				tm_info = localtime_r(&log_file_opened, &tm_info_storage);
 				strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d", tm_info);
-				snprintf(log_line, sizeof(log_line), "%s.%s", log_file, time_buffer);
+				if (log_named_active && log_chain_height) {
+					datum_logger_build_named_path(log_line, sizeof(log_line), log_chain_height, time_buffer);
+				} else {
+					snprintf(log_line, sizeof(log_line), "%s.%s", log_file, time_buffer);
+				}
 				
 				fclose(log_handle);
 
 				if (rename(log_file, log_line) != 0) {
 					DLOG(DLOG_LEVEL_ERROR, "Could not rename log file (%s) for rotation: %s!", log_file, strerror(errno));
+				}
+
+				if (log_named_active && log_chain_height) {
+					char dest[1024];
+					datum_logger_build_named_path(dest, sizeof(dest), log_chain_height, NULL);
+					strncpy(log_file, dest, 1023);
+					log_file[1023] = 0;
+					if (log_file_configured[0]) {
+						datum_logger_replace_with_symlink(log_file_configured, dest);
+					}
 				}
 				
 				log_handle = fopen(log_file,"a");

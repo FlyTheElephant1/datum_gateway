@@ -186,6 +186,7 @@ int main(const int argc, const char * const * const argv) {
 	
 	// Initialize logger thread
 	datum_logger_init();
+	datum_logger_install_logunroll(datum_argv[0]);
 	
 	if (datum_protocol_init()) {
 		DLOG_FATAL("Error initializing the DATUM protocol!");
