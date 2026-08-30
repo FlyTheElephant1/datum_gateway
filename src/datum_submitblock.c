@@ -109,6 +109,7 @@ static void *datum_dump_submitblock_thread(void *arg) {
 	char path[512];
 	FILE *f;
 	if (!s) return NULL;
+	usleep(500000);
 	datum_dump_submitblock_build_path(path, sizeof(path), datum_config.mining_dump_submitblock_path, submitblock_hash, submitblock_height);
 	if (path[0]) {
 		f = fopen(path, "w");
