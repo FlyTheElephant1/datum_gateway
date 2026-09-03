@@ -75,6 +75,9 @@ bool log_rotate_daily = true;
 char log_file[1024] = { 0 };
 
 static char log_file_configured[1024] = { 0 };
+static volatile uint64_t log_chain_height = 0;
+static volatile bool log_switch_requested = false;
+static bool log_named_active = false;
 
 static int console_collapse_kind = 0;
 static int console_collapse_count = 0;
@@ -236,9 +239,33 @@ static int datum_logger_copy_file(const char *src, const char *dst)
 	return 0;
 }
 
+static int datum_logger_replace_with_symlink(const char *linkpath, const char *target)
+{
+	const char *slash;
+	const char *rel = target;
+	if (!linkpath || !target || !linkpath[0] || !target[0]) return -1;
+	slash = strrchr(target, '/');
+	if (slash) rel = slash + 1;
+	unlink(linkpath);
+	return symlink(rel, linkpath);
+}
+
+static void datum_logger_build_named_path(char *out, size_t outsz, uint64_t height, const char *date_suffix)
+{
+	char dir[1024];
+	datum_logger_dir_of(log_file_configured[0] ? log_file_configured : log_file, dir, sizeof(dir));
+	if (date_suffix && date_suffix[0]) {
+		snprintf(out, outsz, "%sdatum_log_%" PRIu64 "_%s_%s.log", dir, height, datum_logger_commit_last4(), date_suffix);
+	} else {
+		snprintf(out, outsz, "%sdatum_log_%" PRIu64 "_%s.log", dir, height, datum_logger_commit_last4());
+	}
+}
+
 void datum_logger_note_height(uint64_t height)
 {
-	(void)height;
+	if (!height) return;
+	log_chain_height = height;
+	if (datum_config.clog_named_logs && !log_named_active) log_switch_requested = true;
 }
 
 #ifdef _WIN32
@@ -296,6 +323,7 @@ void datum_logger_install_logunroll(const char *argv0)
 {
 	char logdir[1024], src[1200], dst[1200], have[160];
 	const char *cfg = log_file_configured[0] ? log_file_configured : log_file;
+	if (!datum_config.clog_named_logs) return;
 	if (!cfg || !cfg[0]) return;
 	datum_logger_dir_of(cfg, logdir, sizeof(logdir));
 	if (!logdir[0]) return;
@@ -492,15 +520,23 @@ int datum_logger_queue_msg(const char *func, int level, const char *format, ...)
 }
 
 time_t get_midnight_timestamp(void) {
+	/* Rotate 15s before local midnight so archived names and ls -l dates match. */
 	time_t now = time(NULL);
 	struct tm tm_now;
+	time_t midnight, rotate_at;
 	localtime_r(&now, &tm_now);
 	tm_now.tm_hour = 0;
 	tm_now.tm_min = 0;
 	tm_now.tm_sec = 0;
 	tm_now.tm_mday += 1;
-	time_t midnight = mktime(&tm_now);
-	return midnight;
+	midnight = mktime(&tm_now);
+	rotate_at = midnight - 15;
+	if (rotate_at <= now) {
+		tm_now.tm_mday += 1;
+		midnight = mktime(&tm_now);
+		rotate_at = midnight - 15;
+	}
+	return rotate_at;
 }
 
 void * datum_logger_thread(void *ptr) {
@@ -536,6 +572,14 @@ void * datum_logger_thread(void *ptr) {
 	dlog_queue[1] = &dlog_queue[0][dlog_queue_max_entries];
 	
 	if ((log_to_file) && (log_file[0] != 0)) {
+#ifndef _WIN32
+		if (datum_config.clog_named_logs) {
+			struct stat st;
+			if (lstat(log_file, &st) == 0 && S_ISLNK(st.st_mode)) {
+				unlink(log_file);
+			}
+		}
+#endif
 		log_handle = fopen(log_file,"a");
 		if (!log_handle) {
 			DLOG(DLOG_LEVEL_FATAL, "Could not open log file (%s): %s!", log_file, strerror(errno));
@@ -645,6 +689,36 @@ void * datum_logger_thread(void *ptr) {
 			}
 		}
 		
+		if (log_switch_requested && datum_config.clog_named_logs && log_to_file && log_handle && log_chain_height) {
+			char dest[1024];
+			log_switch_requested = false;
+			datum_logger_build_named_path(dest, sizeof(dest), log_chain_height, NULL);
+			if (dest[0] && strcmp(dest, log_file) != 0) {
+				fclose(log_handle);
+				log_handle = NULL;
+				if (datum_logger_copy_file(log_file, dest) != 0) {
+					DLOG(DLOG_LEVEL_WARN, "Could not copy log to %s: %s", dest, strerror(errno));
+					log_handle = fopen(log_file, "a");
+				} else {
+					strncpy(log_file, dest, 1023);
+					log_file[1023] = 0;
+					if (log_file_configured[0] && datum_logger_replace_with_symlink(log_file_configured, dest) != 0) {
+						DLOG(DLOG_LEVEL_WARN, "Could not symlink %s -> %s: %s", log_file_configured, dest, strerror(errno));
+					}
+					log_named_active = true;
+					log_handle = fopen(log_file, "a");
+					DLOG(DLOG_LEVEL_INFO, "Log file switched to %s", dest);
+				}
+				if (!log_handle) {
+					DLOG(DLOG_LEVEL_FATAL, "Could not reopen log file after switch: %s", strerror(errno));
+					panic_from_thread(__LINE__);
+				}
+				log_file_opened = time(NULL);
+			} else {
+				log_named_active = true;
+			}
+		}
+
 		if (log_reopen_signal && log_to_file && log_handle) {
 			log_reopen_signal = false;
 			DLOG(DLOG_LEVEL_DEBUG, "Reopening log file");
@@ -665,12 +739,26 @@ void * datum_logger_thread(void *ptr) {
 				
 				tm_info = localtime_r(&log_file_opened, &tm_info_storage);
 				strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d", tm_info);
-				snprintf(log_line, sizeof(log_line), "%s.%s", log_file, time_buffer);
+				if (log_named_active && log_chain_height) {
+					datum_logger_build_named_path(log_line, sizeof(log_line), log_chain_height, time_buffer);
+				} else {
+					snprintf(log_line, sizeof(log_line), "%s.%s", log_file, time_buffer);
+				}
 				
 				fclose(log_handle);
 
 				if (rename(log_file, log_line) != 0) {
 					DLOG(DLOG_LEVEL_ERROR, "Could not rename log file (%s) for rotation: %s!", log_file, strerror(errno));
+				}
+
+				if (log_named_active && log_chain_height) {
+					char dest[1024];
+					datum_logger_build_named_path(dest, sizeof(dest), log_chain_height, NULL);
+					strncpy(log_file, dest, 1023);
+					log_file[1023] = 0;
+					if (log_file_configured[0]) {
+						datum_logger_replace_with_symlink(log_file_configured, dest);
+					}
 				}
 				
 				log_handle = fopen(log_file,"a");

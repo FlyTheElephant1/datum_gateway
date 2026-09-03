@@ -179,6 +179,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_rotate_daily",			.description = "Rotate the message log file at midnight",
 		.example_default = true,
 		.required = false, .ptr = &datum_config.clog_rotate_daily, 		.default_bool = true },
+	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "named_logs",				.description = "After the first template, copy the live log to datum_log_<height>_<commit>.log and point the configured path at it with a symlink. Off by default so existing wrappers keep the classic log_file / log_file.YYYY-MM-DD names.",
+		.required = false, .ptr = &datum_config.clog_named_logs, 		.default_bool = false },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_calling_function",		.description = "Log the name of the calling function when logging",
 		.required = false, .ptr = &datum_config.clog_calling_function, 		.default_bool = true },
 	{ .var_type = DATUM_CONF_INT, 		.category = "logger",	.name = "log_level_console",			.description = "Minimum log level for console messages (0=All, 1=Debug, 2=Info, 3=Warn, 4=Error, 5=Fatal)",
