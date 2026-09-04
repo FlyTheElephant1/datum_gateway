@@ -844,7 +844,7 @@ static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *u
 	if (datum_config.logger_log_share_hashes && share_hash_le) {
 		hash_hex[64] = 0;
 		for (i = 0; i < 32; i++) {
-			uchar_to_hex((char *)&hash_hex[(31-i)<<1], share_hash_le[i]);
+			uchar_to_hex(&hash_hex[(31-i)*2], share_hash_le[i]);
 		}
 		have_hash = true;
 	}
