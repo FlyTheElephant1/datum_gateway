@@ -191,6 +191,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = &datum_config.logger_log_shares, 		.default_bool = false },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_share_hashes",			.description = "Append the share's hash to each accepted share log line. Requires log_shares.",
 		.required = false, .ptr = &datum_config.logger_log_share_hashes, 	.default_bool = false },
+	{ .var_type = DATUM_CONF_INT, 		.category = "logger", 		.name = "log_share_hashes_missingzeros",	.description = "With log_share_hashes on, only append the hash when missingzeros <= this value. -1 = log the hash for every accepted share.",
+		.required = false, .ptr = &datum_config.logger_log_share_hashes_missingzeros, .default_int = -1 },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "debug_blake2b_pow",			.description = "Log BLAKE2b H1 (119-byte) payload and final LE hash for each commitment/hash (INFO). For diagnosing high-hash mismatches.",
 		.required = false, .ptr = &datum_config.logger_debug_blake2b_pow, 		.default_bool = false },
 	{ .var_type = DATUM_CONF_BOOL,          .category = "logger",           .name = "console_collapse_job_updates",         .description = "Collapse repeating stratum job update logs into a single line counter to prevent console flooding.",

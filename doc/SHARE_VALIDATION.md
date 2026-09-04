@@ -44,7 +44,8 @@ That calls `TestBlockValidity(..., check_pow=false)`.
 | key | default | meaning |
 |---|---|---|
 | `logger.log_shares` | false | INFO line per accepted/rejected share that passes the missingzeros gate + `missingzeros` (leading bits short of the block target; `0` is a block candidate) |
-| `logger.log_share_hashes` | false | Append `hash=` to each accepted share line. Requires `log_shares`. See below. |
+| `logger.log_share_hashes` | false | Append `hash=` to accepted share lines. Requires `logger.log_shares`. |
+| `logger.log_share_hashes_missingzeros` | -1 | With `logger.log_share_hashes` on, only append the hash when `missingzeros <=` this. `-1` = every accepted share. Does nothing while `log_share_hashes` is off. |
 | `logger.debug_blake2b_pow` | false | INFO dump of BLAKE2b H1 (119 bytes) and final LE hash |
 | `mining.blake2b_force_version_high_bit` | true | OR `0x80000000` onto header/H1 version. Leave **true** unless `job` version already has the v2 bit *and* GBT did not strip it (the common GBT path clears `0x80000000` from `version` before serialization). |
 | `mining.dump_submitblock_path` | `""` | If set, write each submitblock JSON to this file (detached thread) |
@@ -71,32 +72,30 @@ Then look for:
 ```
 SHARE accepted user=... host=... reason=ok diff=... missingzeros=2
 SHARE accepted user=... host=... reason=block diff=... missingzeros=0
-SHARE node-check user=... mode=proposal diff=... => null (structurally valid; PoW not required for proposal)
+SHARE <64 hex> mode=proposal d=... => null (structurally valid; PoW not required)
 ```
 
 If proposal returns anything other than `null`, that string is the real
 template/header/coinbase mismatch — not “the miner is too weak.”
 
-## Share hashes for external tooling
+## Share hashes
 
-`missingzeros` is a power-of-two bucket: it says a share landed somewhere in a
-2x range, not where in it. That is enough to sort shares into tiers, but not
-enough to say what difficulty a share actually achieved.
-
-Setting `logger.log_share_hashes: true` appends the share's hash to each
-accepted share line:
+`missingzeros` is a power-of-two bucket, so it cannot say what difficulty a
+share actually achieved. `logger.log_share_hashes` appends the share's own
+hash to accepted share lines:
 
 ```
 SHARE accepted user=... reason=ok diff=1024/1024/71371438 missingzeros=7 hash=<64 hex>
 ```
 
-It is printed in the same reversed big-endian hex order bitcoind's own RPCs use
-for block hashes, matching the existing `BLOCK FOUND` line.
+Same reversed big-endian order as the `BLOCK FOUND` line. Achieved difficulty
+is `difficulty_1_target / hash`; the block target it was measured against is
+`difficulty_1_target / blockdiff`, where `blockdiff` is the third component of
+`diff=` already on the line.
 
-The hash alone is enough. Achieved difficulty is `difficulty_1_target / hash`,
-and the block target needed to interpret it is `difficulty_1_target / blockdiff`
-— `blockdiff` being the third component of `diff=` on the same line.
-
-Off by default, since it adds 70 characters to every accepted share line. Only
-what is printed changes: this runs after the share has been validated, accepted
-and submitted.
+The hash costs 70 characters, so `logger.log_share_hashes_missingzeros` can
+limit it to shares at or below a given tier. Nothing is lost by doing so — the
+tiers are monotonic, so a deeper share can never have achieved more difficulty
+than a shallower one. It defaults to `-1` (no limit) because the fraction of
+lines affected is `2^N / (blockdiff / vardiff)`, which varies far too much
+between gateways for any one value to be a sensible default.

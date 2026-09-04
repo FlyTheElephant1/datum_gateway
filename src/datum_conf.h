@@ -161,6 +161,7 @@ typedef struct {
 	char clog_file[1024];
 	bool logger_log_shares;
 	bool logger_log_share_hashes;
+	int logger_log_share_hashes_missingzeros;
 	bool logger_debug_blake2b_pow;
 	
 	char datum_pool_host[1024];
