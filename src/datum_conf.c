@@ -189,6 +189,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = &datum_config.clog_level_file, .default_int = 1 },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_shares",				.description = "Log the result of every incoming share at INFO (level 2): accepted or rejected with reason",
 		.required = false, .ptr = &datum_config.logger_log_shares, 		.default_bool = false },
+	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_share_hashes",			.description = "Append the share's hash to each accepted share log line. Requires log_shares.",
+		.required = false, .ptr = &datum_config.logger_log_share_hashes, 	.default_bool = false },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "debug_blake2b_pow",			.description = "Log BLAKE2b H1 (119-byte) payload and final LE hash for each commitment/hash (INFO). For diagnosing high-hash mismatches.",
 		.required = false, .ptr = &datum_config.logger_debug_blake2b_pow, 		.default_bool = false },
 	{ .var_type = DATUM_CONF_BOOL,          .category = "logger",           .name = "console_collapse_job_updates",         .description = "Collapse repeating stratum job update logs into a single line counter to prevent console flooding.",

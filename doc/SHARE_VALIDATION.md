@@ -28,6 +28,7 @@ That calls `TestBlockValidity(..., check_pow=false)`.
 "logger": {
   "log_level_console": 2,
   "log_shares": true,
+  "log_share_hashes": false,
   "debug_blake2b_pow": false
 },
 "mining": {
@@ -43,6 +44,7 @@ That calls `TestBlockValidity(..., check_pow=false)`.
 | key | default | meaning |
 |---|---|---|
 | `logger.log_shares` | false | INFO line per accepted/rejected share that passes the missingzeros gate + `missingzeros` (leading bits short of the block target; `0` is a block candidate) |
+| `logger.log_share_hashes` | false | Append `hash=` to each accepted share line. Requires `log_shares`. See below. |
 | `logger.debug_blake2b_pow` | false | INFO dump of BLAKE2b H1 (119 bytes) and final LE hash |
 | `mining.blake2b_force_version_high_bit` | true | OR `0x80000000` onto header/H1 version. Leave **true** unless `job` version already has the v2 bit *and* GBT did not strip it (the common GBT path clears `0x80000000` from `version` before serialization). |
 | `mining.dump_submitblock_path` | `""` | If set, write each submitblock JSON to this file (detached thread) |
@@ -74,3 +76,27 @@ SHARE node-check user=... mode=proposal diff=... => null (structurally valid; Po
 
 If proposal returns anything other than `null`, that string is the real
 template/header/coinbase mismatch — not “the miner is too weak.”
+
+## Share hashes for external tooling
+
+`missingzeros` is a power-of-two bucket: it says a share landed somewhere in a
+2x range, not where in it. That is enough to sort shares into tiers, but not
+enough to say what difficulty a share actually achieved.
+
+Setting `logger.log_share_hashes: true` appends the share's hash to each
+accepted share line:
+
+```
+SHARE accepted user=... reason=ok diff=1024/1024/71371438 missingzeros=7 hash=<64 hex>
+```
+
+It is printed in the same reversed big-endian hex order bitcoind's own RPCs use
+for block hashes, matching the existing `BLOCK FOUND` line.
+
+The hash alone is enough. Achieved difficulty is `difficulty_1_target / hash`,
+and the block target needed to interpret it is `difficulty_1_target / blockdiff`
+— `blockdiff` being the third component of `diff=` on the same line.
+
+Off by default, since it adds 70 characters to every accepted share line. Only
+what is printed changes: this runs after the share has been validated, accepted
+and submitted.

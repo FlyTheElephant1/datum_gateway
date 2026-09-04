@@ -803,12 +803,21 @@ static unsigned datum_missing_block_zero_bits(const unsigned char *share_hash_le
 	return k + 1;
 }
 
-static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *username, bool accepted, const char *reason, uint64_t job_diff, uint64_t vardiff, uint64_t blockdiff, int missing_zeros)
+// share_hash_le is NULL on the early-reject paths, which run before a share's
+// hash exists.  when set, and logger.log_share_hashes is on, we append it in
+// the same reversed hex order as the BLOCK FOUND line, so external tooling can
+// work out a share's exact achieved difficulty instead of guessing it from the
+// missingzeros bucket.
+static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *username, bool accepted, const char *reason, uint64_t job_diff, uint64_t vardiff, uint64_t blockdiff, int missing_zeros, const unsigned char *share_hash_le)
 {
 	const char *host;
 	const char *user;
 	char mult[64];
 	char diffs[96];
+	char hash_hex[65];
+	bool have_hash = false;
+	int i;
+
 	if (!datum_config.logger_log_shares) return;
 	if (datum_config.mining_share_node_check_missingzeros >= 0) {
 		if (missing_zeros < 0 || missing_zeros > datum_config.mining_share_node_check_missingzeros) return;
@@ -828,9 +837,25 @@ static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *u
 	} else {
 		snprintf(diffs, sizeof(diffs), "%" PRIu64, job_diff);
 	}
+
+	// off by default, since this adds 70 chars to every accepted share line.
+	// no target= here: it's recoverable from blockdiff in diff= on this same
+	// line as difficulty_1_target/blockdiff.
+	if (datum_config.logger_log_share_hashes && share_hash_le) {
+		hash_hex[64] = 0;
+		for (i = 0; i < 32; i++) {
+			uchar_to_hex((char *)&hash_hex[(31-i)<<1], share_hash_le[i]);
+		}
+		have_hash = true;
+	}
+
 	if (accepted) {
 		if (missing_zeros >= 0) {
-			DLOG_INFO("SHARE%s accepted user=%s host=%s reason=%s diff=%s missingzeros=%d", mult, user, host, reason ? reason : "ok", diffs, missing_zeros);
+			if (have_hash) {
+				DLOG_INFO("SHARE%s accepted user=%s host=%s reason=%s diff=%s missingzeros=%d hash=%s", mult, user, host, reason ? reason : "ok", diffs, missing_zeros, hash_hex);
+			} else {
+				DLOG_INFO("SHARE%s accepted user=%s host=%s reason=%s diff=%s missingzeros=%d", mult, user, host, reason ? reason : "ok", diffs, missing_zeros);
+			}
 		} else {
 			DLOG_INFO("SHARE%s accepted user=%s host=%s reason=%s diff=%s", mult, user, host, reason ? reason : "ok", diffs);
 		}
@@ -844,47 +869,47 @@ static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *u
 }
 
 static inline void send_unknown_work_error(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "unknown-work", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "unknown-work", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[20,\"unknown-work\",null]");
 }
 
 static inline void send_rejected_high_hash_error(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "high-hash", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "high-hash", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[23,\"high-hash\",null]");
 }
 
 static inline void send_rejected_stale(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "stale-work", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "stale-work", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[21,\"stale-work\",null]");
 }
 
 static inline void send_rejected_time_too_old(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "time-too-old", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "time-too-old", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[21,\"time-too-old\",null]");
 }
 
 static inline void send_rejected_time_too_new(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "time-too-new", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "time-too-new", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[21,\"time-too-new\",null]");
 }
 
 static inline void send_rejected_stale_block(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "stale-prevblk", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "stale-prevblk", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[21,\"stale-prevblk\",null]");
 }
 
 static inline void send_rejected_hnotzero_error(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "H-not-zero", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "H-not-zero", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[23,\"H-not-zero\",null]");
 }
 
 static inline void send_bad_version_error(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "bad-version", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "bad-version", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[23,\"bad-version\",null]");
 }
 
 static inline void send_rejected_duplicate(T_DATUM_CLIENT_DATA *c, uint64_t id, const char *username, uint64_t diff) {
-	stratum_log_share_result(c, username, false, "duplicate", diff, 0, 0, -1);
+	stratum_log_share_result(c, username, false, "duplicate", diff, 0, 0, -1, NULL);
 	send_error_to_client(c, id, "[22,\"duplicate\",null]");
 }
 
@@ -1583,7 +1608,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			const uint64_t vardiff = m->current_diff ? m->current_diff : job_diff;
 			long double bld = job->nbits[0] ? calc_network_difficulty(job->nbits) : 0.0L;
 			const uint64_t blockdiff = (bld > 0.0L && bld < (long double)UINT64_MAX) ? (uint64_t)(bld + 0.5L) : 0;
-			stratum_log_share_result(c, username_s, true, was_block ? "block" : "ok", job_diff, vardiff, blockdiff, missing_zeros);
+			stratum_log_share_result(c, username_s, true, was_block ? "block" : "ok", job_diff, vardiff, blockdiff, missing_zeros, share_hash);
 		}
 		datum_maybe_validate_share_on_node(block_header, full_cb_txn, cb ? (cb->coinb1_len+12+cb->coinb2_len) : 0, job, empty_work, extranonce_bin, username_s, job_diff, was_block, missing_zeros);
 	}

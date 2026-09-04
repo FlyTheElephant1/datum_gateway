@@ -160,6 +160,7 @@ typedef struct {
 	bool clog_console_collapse_jobs;
 	char clog_file[1024];
 	bool logger_log_shares;
+	bool logger_log_share_hashes;
 	bool logger_debug_blake2b_pow;
 	
 	char datum_pool_host[1024];
