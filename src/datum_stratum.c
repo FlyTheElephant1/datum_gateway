@@ -1598,6 +1598,11 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			const uint64_t blockdiff = (bld > 0.0L && bld < (long double)UINT64_MAX) ? (uint64_t)(bld + 0.5L) : 0;
 			stratum_log_share_result(c, username_s, true, was_block ? "block" : "ok", job_diff, vardiff, blockdiff, missing_zeros);
 		}
+		if (was_block) {
+			char hash_hex[65];
+			datum_share_hash_to_hex(hash_hex, share_hash);
+			DLOG_INFO("SHARE %s mode=block d=%" PRIu64 " => submitted", hash_hex, job_diff);
+		}
 		datum_maybe_validate_share_on_node(block_header, full_cb_txn, cb ? (cb->coinb1_len+12+cb->coinb2_len) : 0, job, empty_work, extranonce_bin, share_hash, job_diff, was_block, missing_zeros);
 	}
 	

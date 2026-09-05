@@ -69,6 +69,7 @@ Then look for:
 ```
 SHARE accepted user=... host=... reason=ok diff=... missingzeros=2
 SHARE accepted user=... host=... reason=block diff=... missingzeros=0
+SHARE <64 hex> mode=block d=... => submitted
 SHARE <64 hex> mode=proposal d=... => null (seems valid)
 ```
 
