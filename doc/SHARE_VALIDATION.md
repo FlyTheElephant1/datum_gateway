@@ -69,7 +69,7 @@ Then look for:
 ```
 SHARE accepted user=... host=... reason=ok diff=... missingzeros=2
 SHARE accepted user=... host=... reason=block diff=... missingzeros=0
-SHARE node-check user=... mode=proposal diff=... => null (structurally valid; PoW not required for proposal)
+SHARE <64 hex> mode=proposal d=... => null (seems valid)
 ```
 
 If proposal returns anything other than `null`, that string is the real

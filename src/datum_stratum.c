@@ -65,7 +65,7 @@ T_DATUM_SOCKET_APP *global_stratum_app = NULL;
 
 int stratum_job_next = 0;
 
-static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce, const char *username, uint64_t diff, bool was_block, int missing_zeros);
+static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce, const unsigned char *share_hash_le, uint64_t diff, bool was_block, int missing_zeros);
 T_DATUM_STRATUM_JOB stratum_job_list[MAX_STRATUM_JOBS];
 
 int global_latest_stratum_job_index = -1;
@@ -801,6 +801,19 @@ static unsigned datum_missing_block_zero_bits(const unsigned char *share_hash_le
 	datum_shr_le256(h, k);
 	if (compare_hashes(h, block_target_le) <= 0) return k;
 	return k + 1;
+}
+
+
+// Writes a share hash as 64 hex chars plus a terminator, reversed into the
+// big-endian order bitcoind's RPCs and the BLOCK FOUND log use. NULL yields
+// an empty string.
+static void datum_share_hash_to_hex(char *out, const unsigned char *hash_le) {
+	int i;
+	if (!hash_le) { out[0] = 0; return; }
+	for (i = 0; i < 32; i++) {
+		uchar_to_hex(&out[(31-i)*2], hash_le[i]);
+	}
+	out[64] = 0;
 }
 
 static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *username, bool accepted, const char *reason, uint64_t job_diff, uint64_t vardiff, uint64_t blockdiff, int missing_zeros)
@@ -1585,7 +1598,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			const uint64_t blockdiff = (bld > 0.0L && bld < (long double)UINT64_MAX) ? (uint64_t)(bld + 0.5L) : 0;
 			stratum_log_share_result(c, username_s, true, was_block ? "block" : "ok", job_diff, vardiff, blockdiff, missing_zeros);
 		}
-		datum_maybe_validate_share_on_node(block_header, full_cb_txn, cb ? (cb->coinb1_len+12+cb->coinb2_len) : 0, job, empty_work, extranonce_bin, username_s, job_diff, was_block, missing_zeros);
+		datum_maybe_validate_share_on_node(block_header, full_cb_txn, cb ? (cb->coinb1_len+12+cb->coinb2_len) : 0, job, empty_work, extranonce_bin, share_hash, job_diff, was_block, missing_zeros);
 	}
 	
 	// update since-snap totals
@@ -2651,7 +2664,7 @@ static char *datum_write_assembled_block_hex(char *ptr, uint8_t *block_header, u
 struct datum_share_node_check_job {
 	char *req;
 	char mode[16];
-	char user[192];
+	char hash[65];
 	uint64_t diff;
 };
 
@@ -2665,45 +2678,48 @@ static void datum_share_node_check_clear_in_flight(void) {
 static void *datum_share_node_check_thread(void *arg) {
 	struct datum_share_node_check_job *job = arg;
 	CURL *curl;
-	json_t *r, *result, *err;
+	json_t *r = NULL, *result = NULL, *err = NULL;
 	char *dump;
+
 	curl = curl_easy_init();
 	if (!curl) {
 		DLOG_WARN("SHARE node-check could not init curl");
-		free(job->req);
-		free(job);
-		datum_share_node_check_clear_in_flight();
-		return NULL;
+		goto out;
 	}
+
 	r = bitcoind_json_rpc_call_unchecked(curl, &datum_config, job->req);
 	curl_easy_cleanup(curl);
-	if (!r) {
-		DLOG_INFO("SHARE node-check user=%s mode=%s diff=%" PRIu64 " => transport/HTTP error (no JSON)", job->user, job->mode, job->diff);
-	} else {
-		err = json_object_get(r, "error");
+
+	if (r) {
 		result = json_object_get(r, "result");
-		if (err && !json_is_null(err)) {
-			dump = json_dumps(err, JSON_ENCODE_ANY);
-			DLOG_INFO("SHARE node-check user=%s mode=%s diff=%" PRIu64 " => RPC error %s", job->user, job->mode, job->diff, dump ? dump : "(unknown)");
-			free(dump);
-		} else if (!result || json_is_null(result)) {
-			DLOG_INFO("SHARE node-check user=%s mode=%s diff=%" PRIu64 " => null (structurally valid; PoW not required for proposal)", job->user, job->mode, job->diff);
-		} else if (json_is_string(result)) {
-			DLOG_INFO("SHARE node-check user=%s mode=%s diff=%" PRIu64 " => %s", job->user, job->mode, job->diff, json_string_value(result));
-		} else {
-			dump = json_dumps(result, JSON_ENCODE_ANY);
-			DLOG_INFO("SHARE node-check user=%s mode=%s diff=%" PRIu64 " => %s", job->user, job->mode, job->diff, dump ? dump : "(unknown)");
-			free(dump);
-		}
-		json_decref(r);
+		err = json_object_get(r, "error");
 	}
+
+	if (r && result && json_is_null(result) && (!err || json_is_null(err))) {
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => null (seems valid)", job->hash, job->mode, job->diff);
+	} else if (!r) {
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => transport/HTTP error (no JSON)", job->hash, job->mode, job->diff);
+	} else if (err && !json_is_null(err)) {
+		dump = json_dumps(err, JSON_ENCODE_ANY);
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => RPC error %s", job->hash, job->mode, job->diff, dump ? dump : "(unknown)");
+		free(dump);
+	} else if (result && json_is_string(result)) {
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => %s", job->hash, job->mode, job->diff, json_string_value(result));
+	} else {
+		dump = json_dumps(result, JSON_ENCODE_ANY);
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => %s", job->hash, job->mode, job->diff, dump ? dump : "(unknown)");
+		free(dump);
+	}
+
+	if (r) json_decref(r);
+out:
 	free(job->req);
 	free(job);
 	datum_share_node_check_clear_in_flight();
 	return NULL;
 }
 
-static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce, const char *username, uint64_t diff, bool was_block, int missing_zeros) {
+static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce, const unsigned char *share_hash_le, uint64_t diff, bool was_block, int missing_zeros) {
 	static uint64_t accepted_seen = 0;
 	uint64_t n;
 	int every;
@@ -2773,7 +2789,7 @@ static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *c
 	}
 	cj->req = req;
 	strncpy(cj->mode, mode, sizeof(cj->mode) - 1);
-	if (username) strncpy(cj->user, username, sizeof(cj->user) - 1);
+	datum_share_hash_to_hex(cj->hash, share_hash_le);
 	cj->diff = diff;
 
 	pthread_attr_init(&attr);
