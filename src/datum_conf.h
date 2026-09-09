@@ -157,6 +157,7 @@ typedef struct {
 	bool clog_rotate_daily;
 	char clog_file[1024];
 	bool logger_log_shares;
+	bool clog_console_collapse_jobs;
 	
 	char datum_pool_host[1024];
 	int datum_pool_port;
