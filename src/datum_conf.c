@@ -125,7 +125,7 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = datum_config.mining_coinbase_tag_secondary,			.default_string[0] = "DATUM User", .max_string_len = sizeof(datum_config.mining_coinbase_tag_secondary) },
 	{ .var_type = DATUM_CONF_INT, 		.category = "mining", 		.name = "coinbase_unique_id",		.description = "A unique ID between 1 and 65535. This is appended to the coinbase. Make unique per instance of datum with the same coinbase tags.",
 		.required = false, .ptr = &datum_config.coinbase_unique_id, 		.default_int = 4242 },
-	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "save_submitblocks_dir",	.description = "Directory to save all submitted blocks to as submitblock JSON files",
+	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "save_submitblocks_dir",	.description = "Directory to save submitted blocks as submitblock JSON (datum_submitblock_<height>_<first7 GIT_COMMIT_HASH>.json and datum_submitblock_last.json). Empty disables.",
 		.required = false, .ptr = datum_config.mining_save_submitblocks_dir,			.default_string[0] = "", .max_string_len = sizeof(datum_config.mining_save_submitblocks_dir) },
 	{ .var_type = DATUM_CONF_INT, 		.category = "mining", 		.name = "share_node_check_missingzeros",	.description = "If >= 0, only log SHARE lines and node-check shares with missingzeros <= this value (overrides share_node_check_every). -1 = infinity (log all, use every-N).",
 		.required = false, .ptr = &datum_config.mining_share_node_check_missingzeros, 	.default_int = -1 },

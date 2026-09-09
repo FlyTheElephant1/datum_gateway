@@ -2752,22 +2752,50 @@ int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t 
 	// this way we can have a (future) external watchdog monitoring the folder as a backup to submit the blocks if need be
 	// for added security.  The thread above should already be submitting this block anyway.
 	if (datum_config.mining_save_submitblocks_dir[0] != 0) {
-		// save the block submission to a file named by the block's hash
-		char submitblockpath[384];
-		int n = snprintf(submitblockpath, sizeof(submitblockpath), "%s/datum_submitblock_%s.json", datum_config.mining_save_submitblocks_dir, block_hash_hex);
-		
-		if (n >= sizeof(submitblockpath)) {
+		char unique_path[384];
+		char last_path[384];
+		const char *dir = datum_config.mining_save_submitblocks_dir;
+		size_t req_len = (size_t)(ptr - submitblock_req);
+		uint64_t height = job ? job->height : 0;
+		char gitshort[8];
+		int n;
+		memset(gitshort, 0, sizeof(gitshort));
+		memcpy(gitshort, GIT_COMMIT_HASH, 7);
+		n = snprintf(unique_path, sizeof(unique_path), "%s/datum_submitblock_%lu_%s.json",
+			dir, (unsigned long)height, gitshort[0] ? gitshort : "unknown");
+		if (n < 0 || n >= (int)sizeof(unique_path)) {
 			DLOG_ERROR("Overflow in construction of submitblock path!");
 		} else {
-			FILE *f;
-			f = fopen(submitblockpath, "w");
+			FILE *f = fopen(unique_path, "w");
+			size_t wr;
 			if (!f) {
-				DLOG_ERROR("Could not open %s for writing submitblock record to disk: %s!", submitblockpath, strerror(errno));
+				DLOG_ERROR("Could not open %s for writing submitblock record: %s", unique_path, strerror(errno));
 			} else {
-				if (!fwrite(submitblock_req, ptr-submitblock_req, 1, f)) {
-					DLOG_ERROR("Could not write to %s when writing submitblock record to disk: %s!", submitblockpath, strerror(errno));
+				wr = fwrite(submitblock_req, 1, req_len, f);
+				fflush(f);
+				if (fileno(f) >= 0) fsync(fileno(f));
+				if (fclose(f) != 0 || wr != req_len) {
+					DLOG_ERROR("Could not write %s submitblock record: %s", unique_path, strerror(errno));
+				} else {
+					DLOG_INFO("Wrote submitblock dump (%zu bytes) to %s", wr, unique_path);
 				}
-				fclose(f);
+			}
+		}
+		n = snprintf(last_path, sizeof(last_path), "%s/datum_submitblock_last.json", dir);
+		if (n > 0 && n < (int)sizeof(last_path)) {
+			FILE *f = fopen(last_path, "w");
+			size_t wr;
+			if (!f) {
+				DLOG_ERROR("Could not open %s for writing submitblock record: %s", last_path, strerror(errno));
+			} else {
+				wr = fwrite(submitblock_req, 1, req_len, f);
+				fflush(f);
+				if (fileno(f) >= 0) fsync(fileno(f));
+				if (fclose(f) != 0 || wr != req_len) {
+					DLOG_ERROR("Could not write %s submitblock record: %s", last_path, strerror(errno));
+				} else {
+					DLOG_INFO("Wrote submitblock dump (%zu bytes) to %s", wr, last_path);
+				}
 			}
 		}
 	}
