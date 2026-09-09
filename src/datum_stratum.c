@@ -46,6 +46,8 @@
 #include <jansson.h>
 #include <inttypes.h>
 #include <sys/resource.h>
+#include <strings.h>
+#include <curl/curl.h>
 
 #include "datum_gateway.h"
 #include "datum_stratum.h"
@@ -740,35 +742,152 @@ void send_error_to_client(T_DATUM_CLIENT_DATA *c, uint64_t id, char *e) {
 	stratum_rpc_id_clear(c);
 }
 
+
+static unsigned datum_leading_zero_bits_le(const unsigned char *hash_le)
+{
+	unsigned n = 0;
+	int i, b;
+	if (!hash_le) return 0;
+	for (i = 31; i >= 0; i--) {
+		if (hash_le[i] == 0) {
+			n += 8;
+			continue;
+		}
+		for (b = 7; b >= 0; b--) {
+			if (hash_le[i] & (unsigned char)(1u << b)) return n;
+			n++;
+		}
+	}
+	return n;
+}
+
+static void datum_shr_le256(unsigned char *h, unsigned k)
+{
+	unsigned bytes, bits, i, v, carry, mask;
+	if (!h || k == 0) return;
+	if (k >= 256) {
+		memset(h, 0, 32);
+		return;
+	}
+	bytes = k / 8;
+	bits = k % 8;
+	if (bytes) {
+		memmove(h, h + bytes, 32 - bytes);
+		memset(h + (32 - bytes), 0, bytes);
+	}
+	if (!bits) return;
+	mask = (1u << bits) - 1u;
+	carry = 0;
+	for (i = 31; i != (unsigned)-1; i--) {
+		v = h[i];
+		h[i] = (unsigned char)((v >> bits) | carry);
+		carry = (v & mask) << (8 - bits);
+	}
+}
+
+static unsigned datum_missing_block_zero_bits(const unsigned char *share_hash_le, const unsigned char *block_target_le, bool meets_block_target)
+{
+	unsigned char h[32];
+	unsigned lz_h, lz_t, k;
+	if (meets_block_target) return 0;
+	if (!share_hash_le || !block_target_le) return 0;
+	if (compare_hashes(share_hash_le, block_target_le) <= 0) return 0;
+	lz_h = datum_leading_zero_bits_le(share_hash_le);
+	lz_t = datum_leading_zero_bits_le(block_target_le);
+	k = (lz_t > lz_h) ? (lz_t - lz_h) : 0;
+	memcpy(h, share_hash_le, 32);
+	datum_shr_le256(h, k);
+	if (compare_hashes(h, block_target_le) <= 0) return k;
+	return k + 1;
+}
+
+static void datum_share_hash_to_hex(char *out, const unsigned char *hash_le) {
+	int i;
+	if (!hash_le) { out[0] = 0; return; }
+	for (i = 0; i < 32; i++) {
+		uchar_to_hex(&out[(31-i)*2], hash_le[i]);
+	}
+	out[64] = 0;
+}
+
+static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *username, bool accepted, const char *reason, uint64_t job_diff, uint64_t vardiff, uint64_t blockdiff, int missing_zeros)
+{
+	const char *host;
+	const char *user;
+	char mult[32];
+	char diffs[96];
+	if (!datum_config.logger_log_shares) return;
+	if (datum_config.mining_share_node_check_missingzeros >= 0) {
+		if (missing_zeros < 0 || missing_zeros > datum_config.mining_share_node_check_missingzeros) return;
+	}
+	host = (c && c->rem_host[0]) ? c->rem_host : "?";
+	user = (username && username[0]) ? username : "?";
+	mult[0] = 0;
+	if (job_diff > 0 && vardiff >= job_diff && (vardiff % job_diff) == 0) {
+		snprintf(mult, sizeof(mult), " %" PRIu64 "x", vardiff / job_diff);
+	}
+	if (vardiff || blockdiff) {
+		snprintf(diffs, sizeof(diffs), "%" PRIu64 "/%" PRIu64 "/%" PRIu64, job_diff, vardiff, blockdiff);
+	} else {
+		snprintf(diffs, sizeof(diffs), "%" PRIu64, job_diff);
+	}
+	if (missing_zeros >= 0) {
+		DLOG_INFO("SHARE%s %s %s @%s ?%s diff=%s missingzeros=%d",
+			mult, accepted ? "accepted" : "rejected", user, host,
+			reason ? reason : (accepted ? "ok" : "unknown"), diffs, missing_zeros);
+	} else {
+		DLOG_INFO("SHARE%s %s %s @%s ?%s diff=%s",
+			mult, accepted ? "accepted" : "rejected", user, host,
+			reason ? reason : (accepted ? "ok" : "unknown"), diffs);
+	}
+}
+
+static const char *stratum_share_user_guess(T_DATUM_CLIENT_DATA *c)
+{
+	T_DATUM_MINER_DATA *m;
+	if (!c || !c->app_client_data) return NULL;
+	m = c->app_client_data;
+	if (m->last_auth_username[0]) return m->last_auth_username;
+	return NULL;
+}
+
 static inline void send_unknown_work_error(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "unknown-work", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[20,\"unknown-work\",null]");
 }
 
 static inline void send_rejected_high_hash_error(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "high-hash", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[23,\"high-hash\",null]");
 }
 
 static inline void send_rejected_stale(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "stale-work", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[21,\"stale-work\",null]");
 }
 
 static inline void send_rejected_time_too_old(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "time-too-old", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[21,\"time-too-old\",null]");
 }
 
 static inline void send_rejected_time_too_new(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "time-too-new", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[21,\"time-too-new\",null]");
 }
 
 static inline void send_rejected_stale_block(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "stale-prevblk", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[21,\"stale-prevblk\",null]");
 }
 
 static inline void send_rejected_hnotzero_error(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "H-not-zero", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[23,\"H-not-zero\",null]");
 }
 
 static inline void send_rejected_duplicate(T_DATUM_CLIENT_DATA *c, uint64_t id) {
+	stratum_log_share_result(c, stratum_share_user_guess(c), false, "duplicate", 0, 0, 0, -1);
 	send_error_to_client(c, id, "[22,\"duplicate\",null]");
 }
 
@@ -1357,6 +1476,18 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	
 	// update connection and gateway-local totals
 	stratum_note_share(m, true, job_diff);
+	{
+		const int missing_zeros = (int)datum_missing_block_zero_bits(share_hash, job->block_target, was_block);
+		const uint64_t vardiff = m->current_diff ? m->current_diff : job_diff;
+		long double bld = job->nbits[0] ? calc_network_difficulty(job->nbits) : 0.0L;
+		const uint64_t blockdiff = (bld > 0.0L && bld < (long double)UINT64_MAX) ? (uint64_t)(bld + 0.5L) : 0;
+		stratum_log_share_result(c, username_s, true, was_block ? "block" : "ok", job_diff, vardiff, blockdiff, missing_zeros);
+		if (was_block) {
+			char hash_hex[65];
+			datum_share_hash_to_hex(hash_hex, share_hash);
+			DLOG_INFO("SHARE %s mode=block d=%" PRIu64 " => submitted", hash_hex, job_diff);
+		}
+	}
 	
 	// update since-snap totals
 	m->share_count_since_snap++;

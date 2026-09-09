@@ -127,6 +127,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = &datum_config.coinbase_unique_id, 		.default_int = 4242 },
 	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "save_submitblocks_dir",	.description = "Directory to save all submitted blocks to as submitblock JSON files",
 		.required = false, .ptr = datum_config.mining_save_submitblocks_dir,			.default_string[0] = "", .max_string_len = sizeof(datum_config.mining_save_submitblocks_dir) },
+	{ .var_type = DATUM_CONF_INT, 		.category = "mining", 		.name = "share_node_check_missingzeros",	.description = "If >= 0, only log SHARE lines and node-check shares with missingzeros <= this value (overrides share_node_check_every). -1 = infinity (log all, use every-N).",
+		.required = false, .ptr = &datum_config.mining_share_node_check_missingzeros, 	.default_int = -1 },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "mining", 		.name = "allow_hasher_time_rolling",	.description = "Allow hasher time rolling for BLAKE2b jobs",
 		.required = false, .ptr = &datum_config.mining_allow_hasher_time_rolling, 		.default_bool = false },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "mining", 		.name = "abw_verify_all_shares_on_disclosure",	.description = "Retain ABW proofs until key disclosure and alarm if the pool ignored a block",
@@ -175,6 +177,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 	{ .var_type = DATUM_CONF_INT, 		.category = "logger",	.name = "log_level_file",				.description = "Minimum log level for log file messages (0=All, 1=Debug, 2=Info, 3=Warn, 4=Error, 5=Fatal)",
 		.example_default = true,
 		.required = false, .ptr = &datum_config.clog_level_file, .default_int = 1 },
+	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_shares",				.description = "Log the result of every incoming share at INFO (level 2): accepted or rejected with reason",
+		.required = false, .ptr = &datum_config.logger_log_shares, 		.default_bool = false },
 	
 	// datum options
 	{ .var_type = DATUM_CONF_STRING, 	.category = "datum", 		.name = "pool_host",					.description = "Remote DATUM server host/ip to use for decentralized pooled mining (set to \"\" to disable pooled mining)",
