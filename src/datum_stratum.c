@@ -810,6 +810,7 @@ static void datum_share_hash_to_hex(char *out, const unsigned char *hash_le) {
 	out[64] = 0;
 }
 
+static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce, const unsigned char *share_hash_le, uint64_t diff, bool was_block, int missing_zeros);
 static void stratum_log_share_result(const T_DATUM_CLIENT_DATA *c, const char *username, bool accepted, const char *reason, uint64_t job_diff, uint64_t vardiff, uint64_t blockdiff, int missing_zeros)
 {
 	const char *host;
@@ -1487,6 +1488,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			datum_share_hash_to_hex(hash_hex, share_hash);
 			DLOG_INFO("SHARE %s mode=block d=%" PRIu64 " => submitted", hash_hex, job_diff);
 		}
+		datum_maybe_validate_share_on_node(block_header, full_cb_txn, full_cb_txn_size, job, empty_work, extranonce_bin, share_hash, job_diff, was_block, missing_zeros);
 	}
 	
 	// update since-snap totals
@@ -2456,6 +2458,198 @@ bool datum_stratum_abw_finalize_block_request(char *request, size_t request_size
 	}
 	block_hash_hex[64] = 0;
 	return true;
+}
+
+struct datum_share_node_check_job {
+	char *req;
+	char mode[16];
+	char hash[65];
+	uint64_t diff;
+};
+
+static volatile int datum_share_node_check_in_flight = 0;
+
+static void datum_share_node_check_clear_in_flight(void) {
+	__atomic_store_n(&datum_share_node_check_in_flight, 0, __ATOMIC_RELEASE);
+}
+
+static void *datum_share_node_check_thread(void *arg) {
+	struct datum_share_node_check_job *job = arg;
+	CURL *curl;
+	json_t *r = NULL, *result = NULL, *err = NULL;
+	char *dump;
+
+	curl = curl_easy_init();
+	if (!curl) {
+		DLOG_WARN("SHARE node-check could not init curl");
+		goto out;
+	}
+
+	r = bitcoind_json_rpc_call(curl, &datum_config, job->req);
+	curl_easy_cleanup(curl);
+
+	if (r) {
+		result = json_object_get(r, "result");
+		err = json_object_get(r, "error");
+	}
+
+	if (r && result && json_is_null(result) && (!err || json_is_null(err))) {
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => null (seems valid)", job->hash, job->mode, job->diff);
+	} else if (!r) {
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => transport/HTTP error (no JSON)", job->hash, job->mode, job->diff);
+	} else if (err && !json_is_null(err)) {
+		dump = json_dumps(err, JSON_ENCODE_ANY);
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => RPC error %s", job->hash, job->mode, job->diff, dump ? dump : "(unknown)");
+		free(dump);
+	} else if (result && json_is_string(result)) {
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => %s", job->hash, job->mode, job->diff, json_string_value(result));
+	} else {
+		dump = json_dumps(result, JSON_ENCODE_ANY);
+		DLOG_INFO("SHARE %s mode=%s d=%" PRIu64 " => %s", job->hash, job->mode, job->diff, dump ? dump : "(unknown)");
+		free(dump);
+	}
+
+	if (r) json_decref(r);
+out:
+	free(job->req);
+	free(job);
+	datum_share_node_check_clear_in_flight();
+	return NULL;
+}
+
+static char *datum_write_assembled_block_hex(char *ptr, uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce) {
+	size_t i;
+	unsigned char v2hdr[DATUM_BLAKE2B_BLOCK_HEADER_SIZE];
+	unsigned char merkle[32];
+	unsigned char en[12];
+	unsigned char cbh[32];
+	uint16_t txcount;
+	bool add_witness;
+	char cbhex[(MAX_COINBASE_TXN_SIZE_BYTES + 36) * 2 + 1];
+	size_t cbhex_len;
+	const T_DATUM_TEMPLATE_DATA *td;
+
+	td = job->block_template;
+	txcount = (uint16_t)((empty_work ? 0 : td->txn_count) + 1);
+	if ((job->merklebranch_count) && (!empty_work)) {
+		double_sha256(cbh, coinbase_txn, coinbase_txn_size);
+		stratum_job_merkle_root_calc(job, cbh, merkle);
+	} else {
+		double_sha256(merkle, coinbase_txn, coinbase_txn_size);
+	}
+	memset(en, 0, sizeof(en));
+	if (extranonce) memcpy(en, extranonce, 12);
+	datum_blake2b_serialize_block_header(v2hdr, job->version_uint, job->prevhash_bin, merkle, job->blake2b_time_on_wire, job->nbits_uint, block_header + 32, block_header + 40, en, txcount, job->blake2b_flags, 0, (const unsigned char[16]){0}, (uint32_t)job->height, (const unsigned char[32]){0});
+	for(i=0;i<DATUM_BLAKE2B_BLOCK_HEADER_SIZE;i++) {
+		ptr += sprintf(ptr, "%2.2x", v2hdr[i]);
+	}
+	if (!empty_work) {
+		ptr += append_bitcoin_varint_hex(job->block_template->txn_count + 1, ptr);
+	} else {
+		ptr += append_bitcoin_varint_hex(1, ptr);
+	}
+	add_witness = datum_stratum_block_needs_witness(job, empty_work);
+	cbhex_len = datum_stratum_coinbase_for_block_hex(cbhex, sizeof(cbhex), coinbase_txn, coinbase_txn_size, add_witness);
+	if (!cbhex_len) {
+		for(i=0;i<coinbase_txn_size;i++) {
+			ptr += sprintf(ptr, "%2.2x", coinbase_txn[i]);
+		}
+	} else {
+		memcpy(ptr, cbhex, cbhex_len);
+		ptr += cbhex_len;
+	}
+	if (!empty_work) {
+		for(i=0;i<job->block_template->txn_count;i++) {
+			memcpy(ptr, job->block_template->txns[i].txn_data_hex, job->block_template->txns[i].size*2);
+			ptr += job->block_template->txns[i].size*2;
+		}
+	}
+	*ptr = 0;
+	return ptr;
+}
+
+static void datum_maybe_validate_share_on_node(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, bool empty_work, const unsigned char *extranonce, const unsigned char *share_hash_le, uint64_t diff, bool was_block, int missing_zeros) {
+	static uint64_t accepted_seen = 0;
+	uint64_t n;
+	int every;
+	size_t hex_guess;
+	char *buf, *hex_end, *req;
+	struct datum_share_node_check_job *cj;
+	pthread_t thr;
+	pthread_attr_t attr;
+	const char *mode;
+	size_t i;
+
+	if (was_block) return;
+	if (!datum_config.mining_validate_shares_on_node) return;
+	if (!job || !job->block_template || !block_header || !coinbase_txn) return;
+
+	if (datum_config.mining_share_node_check_missingzeros >= 0) {
+		if (missing_zeros < 0 || missing_zeros > datum_config.mining_share_node_check_missingzeros) return;
+	} else {
+		every = datum_config.mining_share_node_check_every;
+		if (every < 1) every = 1;
+		n = __atomic_add_fetch(&accepted_seen, 1, __ATOMIC_RELAXED);
+		if ((n % (uint64_t)every) != 0) return;
+	}
+	if (!__sync_bool_compare_and_swap(&datum_share_node_check_in_flight, 0, 1)) {
+		DLOG_DEBUG("SHARE node-check skipped (already in flight)");
+		return;
+	}
+
+	mode = datum_config.mining_share_node_check[0] ? datum_config.mining_share_node_check : "proposal";
+	hex_guess = 1024 + coinbase_txn_size * 2;
+	if (!empty_work) {
+		for (i = 0; i < job->block_template->txn_count; i++) {
+			hex_guess += job->block_template->txns[i].size * 2;
+		}
+	}
+	buf = malloc(hex_guess + 8);
+	if (!buf) {
+		datum_share_node_check_clear_in_flight();
+		return;
+	}
+	hex_end = datum_write_assembled_block_hex(buf, block_header, coinbase_txn, coinbase_txn_size, job, empty_work, extranonce);
+	if (!hex_end) {
+		free(buf);
+		datum_share_node_check_clear_in_flight();
+		return;
+	}
+
+	req = malloc(strlen(buf) + 192);
+	if (!req) {
+		free(buf);
+		datum_share_node_check_clear_in_flight();
+		return;
+	}
+	if (strcasecmp(mode, "submitblock") == 0) {
+		sprintf(req, "{\"jsonrpc\":\"1.0\",\"id\":\"sharecheck\",\"method\":\"submitblock\",\"params\":[\"%s\"]}", buf);
+	} else {
+		sprintf(req, "{\"jsonrpc\":\"1.0\",\"id\":\"sharecheck\",\"method\":\"getblocktemplate\",\"params\":[{\"mode\":\"proposal\",\"data\":\"%s\"}]}", buf);
+	}
+	free(buf);
+
+	cj = calloc(1, sizeof(*cj));
+	if (!cj) {
+		free(req);
+		datum_share_node_check_clear_in_flight();
+		return;
+	}
+	cj->req = req;
+	strncpy(cj->mode, mode, sizeof(cj->mode) - 1);
+	datum_share_hash_to_hex(cj->hash, share_hash_le);
+	cj->diff = diff;
+
+	pthread_attr_init(&attr);
+	pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+	if (pthread_create(&thr, &attr, datum_share_node_check_thread, cj) != 0) {
+		free(cj->req);
+		free(cj);
+		pthread_attr_destroy(&attr);
+		datum_share_node_check_clear_in_flight();
+		return;
+	}
+	pthread_attr_destroy(&attr);
 }
 
 int assembleBlockAndSubmit(uint8_t *block_header, uint8_t *coinbase_txn, size_t coinbase_txn_size, T_DATUM_STRATUM_JOB *job, T_DATUM_STRATUM_THREADPOOL_DATA *sdata, const char *block_hash_hex, bool empty_work, const unsigned char *extranonce) {
