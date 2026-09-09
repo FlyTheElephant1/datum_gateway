@@ -1858,6 +1858,16 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 			m->current_diff = datum_config.stratum_v1_vardiff_min;
 		}
 	}
+	if (datum_config.stratum_v1_legacy_listen_port > 0) {
+		if (c->accepted_listen_port == datum_config.stratum_v1_legacy_listen_port) {
+			m->coinbase_selection = 2; /* Antminer-safe ~755 B */
+		} else {
+			m->coinbase_selection = 4; /* 16 KB full window */
+		}
+		DLOG_INFO("miner %s port %d coinbase type %d",
+			m->useragent[0] ? m->useragent : "(no-ua)",
+			c->accepted_listen_port, m->coinbase_selection);
+	}
 	
 	// get a new unique session ID for this connection (extranonce1)
 	sid = get_new_session_id(c);

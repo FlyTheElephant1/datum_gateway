@@ -75,6 +75,7 @@ typedef struct T_DATUM_CLIENT_DATA {
 	int out_buf;
 	
 	char rem_host[DATUM_MAX_IP_LEN+1];
+	int accepted_listen_port;
 	
 	bool kill_request;
 	
@@ -172,7 +173,7 @@ void *datum_gateway_listener_thread(void *arg);
 int datum_socket_send_string_to_client(T_DATUM_CLIENT_DATA *c, char *s);
 int datum_socket_send_chars_to_client(T_DATUM_CLIENT_DATA *c, char *s, int len);
 
-int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd);
+int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd, int accepted_listen_port);
 void *datum_threadpool_thread(void *arg);
 
 static inline void datum_socket_thread_client_count_decrement(T_DATUM_THREAD_DATA *my, int cid_who_left, bool not_already_locked) {
