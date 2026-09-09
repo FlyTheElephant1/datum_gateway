@@ -179,6 +179,8 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 		.required = false, .ptr = &datum_config.clog_level_file, .default_int = 1 },
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "logger", 		.name = "log_shares",				.description = "Log the result of every incoming share at INFO (level 2): accepted or rejected with reason",
 		.required = false, .ptr = &datum_config.logger_log_shares, 		.default_bool = false },
+	{ .var_type = DATUM_CONF_BOOL,          .category = "logger",           .name = "console_collapse_job_updates",         .description = "Collapse repeating stratum job update logs into a single line counter to prevent console flooding.",
+		.required = false, .ptr = &datum_config.clog_console_collapse_jobs,          .default_bool = false },
 	
 	// datum options
 	{ .var_type = DATUM_CONF_STRING, 	.category = "datum", 		.name = "pool_host",					.description = "Remote DATUM server host/ip to use for decentralized pooled mining (set to \"\" to disable pooled mining)",
