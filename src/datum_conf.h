@@ -131,6 +131,7 @@ typedef struct {
 	char mining_coinbase_tag_primary[64];
 	char mining_coinbase_tag_secondary[64];
 	char mining_save_submitblocks_dir[256];
+	int mining_share_node_check_missingzeros;
 	bool mining_allow_hasher_time_rolling;
 	bool mining_abw_verify_all_shares_on_disclosure;
 	int coinbase_unique_id;
@@ -155,6 +156,7 @@ typedef struct {
 	bool clog_to_stderr;
 	bool clog_rotate_daily;
 	char clog_file[1024];
+	bool logger_log_shares;
 	
 	char datum_pool_host[1024];
 	int datum_pool_port;
