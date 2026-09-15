@@ -82,11 +82,9 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 	// stratum v1 server configs
 	{ .var_type = DATUM_CONF_STRING, 	.category = "stratum", 		.name = "listen_addr",					.description = "IP address to listen for Stratum Gateway connections",
 		.required = false, .ptr = datum_config.stratum_v1_listen_addr,				.default_string[0] = "", .max_string_len = sizeof(datum_config.stratum_v1_listen_addr) },
-	{ .var_type = DATUM_CONF_INT, 		.category = "stratum", 		.name = "listen_port",				.description = "Listening port for Stratum Gateway (full 16KB coinbase / type 4 when legacy_listen_port is also set)",
+	{ .var_type = DATUM_CONF_INT, 		.category = "stratum", 		.name = "listen_port",				.description = "Listening port for Stratum Gateway",
 		.example_default = true,
 		.required = false, .ptr = &datum_config.stratum_v1_listen_port, 				.default_int = 23334 },
-	{ .var_type = DATUM_CONF_INT, 		.category = "stratum", 		.name = "legacy_listen_port",		.description = "Optional second Stratum port for old ASICs. Uses the small Antminer-safe coinbase (type 2, ~755 bytes). 0 disables.",
-		.required = false, .ptr = &datum_config.stratum_v1_legacy_listen_port, 			.default_int = 0 },
 	{ .var_type = DATUM_CONF_INT, 		.category = "stratum", 		.name = "max_clients_per_thread",	.description = "Maximum clients per Stratum server thread",
 		.required = false, .ptr = &datum_config.stratum_v1_max_clients_per_thread, 		.default_int = 128 },
 	{ .var_type = DATUM_CONF_INT, 		.category = "stratum", 		.name = "max_threads",				.description = "Maximum Stratum server threads",

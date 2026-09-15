@@ -397,7 +397,7 @@ void clean_thread_data(T_DATUM_THREAD_DATA *d, T_DATUM_SOCKET_APP *app) {
 	d->app = app;
 }
 
-int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd, int accepted_listen_port) {
+int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd) {
 	// Only one thread will be calling this function for a particular "app"
 	// under the current design.  Safe to assume that multiple clients will
 	// not cause overlap here.
@@ -542,7 +542,6 @@ int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd, int accepted_listen_port) 
 	// clear up and prep slot's client data without clobbering app_client_data
 	app->datum_threads[tid].client_data[cid].fd = fd;
 	app->datum_threads[tid].client_data[cid].cid = cid;
-	app->datum_threads[tid].client_data[cid].accepted_listen_port = accepted_listen_port;
 	app->datum_threads[tid].client_data[cid].new_connection = true;
 	app->datum_threads[tid].client_data[cid].datum_thread = (void *)&app->datum_threads[tid];
 	app->datum_threads[tid].client_data[cid].in_buf = 0;
@@ -679,10 +678,7 @@ void *datum_gateway_listener_thread(void *arg) {
 	T_DATUM_SOCKET_APP *app = (T_DATUM_SOCKET_APP *)arg;
 	
 	struct epoll_event ev, events[MAX_EVENTS];
-	int listen_socks[8];
-	int listen_sock_ports[8];
-	int conn_sock, nfds, epollfd;
-	int nlisten = 0;
+	int listen_socks[2], conn_sock, nfds, epollfd;
 	
 	if (!app) {
 		DLOG_FATAL("Called without application data structure. :(");
@@ -711,33 +707,11 @@ void *datum_gateway_listener_thread(void *arg) {
 	
 	app->datum_active_threads = 0;
 	
-	{
-		int tmp[2];
-		size_t tmpn;
-		unsigned p;
-		tmpn = 2;
-		if (!datum_sockets_setup_listening_sockets("stratum", datum_config.stratum_v1_listen_addr, app->listen_port, tmp, &tmpn)) {
-			return NULL;
-		}
-		for (p = 0; p < tmpn && nlisten < 8; p++) {
-			listen_socks[nlisten] = tmp[p];
-			listen_sock_ports[nlisten] = app->listen_port;
-			nlisten++;
-		}
-		if (datum_config.stratum_v1_legacy_listen_port > 0 &&
-		    datum_config.stratum_v1_legacy_listen_port != app->listen_port) {
-			tmpn = 2;
-			if (!datum_sockets_setup_listening_sockets("stratum-legacy", datum_config.stratum_v1_listen_addr, (uint16_t)datum_config.stratum_v1_legacy_listen_port, tmp, &tmpn)) {
-				return NULL;
-			}
-			for (p = 0; p < tmpn && nlisten < 8; p++) {
-				listen_socks[nlisten] = tmp[p];
-				listen_sock_ports[nlisten] = datum_config.stratum_v1_legacy_listen_port;
-				nlisten++;
-			}
-			DLOG_INFO("Stratum also listening on legacy port %d (small coinbase)", datum_config.stratum_v1_legacy_listen_port);
-		}
+	size_t listen_socks_len = 2;
+	if (!datum_sockets_setup_listening_sockets("stratum", datum_config.stratum_v1_listen_addr, app->listen_port, listen_socks, &listen_socks_len)) {
+		return NULL;
 	}
+	if (listen_socks_len < 2) listen_socks[1] = -1;
 	
 	epollfd = epoll_create1(0);
 	if (epollfd < 0) {
@@ -746,7 +720,7 @@ void *datum_gateway_listener_thread(void *arg) {
 		return NULL;
 	}
 	
-	for (i = 0; i < nlisten; ++i) {
+	for (i = 0; i < 2; ++i) {
 		if (listen_socks[i] == -1) continue;
 		ev.events = EPOLLIN;
 		ev.data.fd = listen_socks[i];
@@ -773,16 +747,7 @@ void *datum_gateway_listener_thread(void *arg) {
 			}
 		}
 		for (int n = 0; n < nfds; ++n) {
-			int accepted_port = app->listen_port;
-			int is_listen = 0;
-			for (i = 0; i < nlisten; i++) {
-				if (events[n].data.fd == listen_socks[i]) {
-					is_listen = 1;
-					accepted_port = listen_sock_ports[i];
-					break;
-				}
-			}
-			if (is_listen) {
+			if (events[n].data.fd == listen_socks[0] || events[n].data.fd == listen_socks[1]) {
 				conn_sock = accept(events[n].data.fd, NULL, NULL);
 				if (conn_sock < 0) {
 					DLOG_ERROR("accept failed: %s", strerror(errno));
@@ -808,7 +773,7 @@ void *datum_gateway_listener_thread(void *arg) {
 				}
 				
 				// assign socket to a thread
-				i = assign_to_thread(app, conn_sock, accepted_port);
+				i = assign_to_thread(app, conn_sock);
 				if (!i) {
 					// error finding a thread (too many connections?)
 					DLOG_DEBUG("Closing socket we couldn't assign %d", conn_sock);
