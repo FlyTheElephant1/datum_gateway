@@ -1583,15 +1583,20 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	return 0;
 }
 
+// On Blake the miner never receives the generation tx (notify is a 39-byte
+// stub). Coinbase class only decides how many of the pool's payout outputs
+// land in the block. Per-miner type 2 was the TIDES truncate: leftover
+// value dumped on pool_address. Once the coinbaser is ready, everyone
+// gets YUGE. miner is unused; kept so call sites stay stable.
 unsigned int datum_stratum_coinbase_index(
 	const T_DATUM_STRATUM_THREADPOOL_DATA *sdata,
 	const T_DATUM_MINER_DATA *miner, bool new_block) {
+	(void)miner;
 	if (new_block) return DATUM_COINBASE_ID_EMPTY;
-	if (!sdata || !miner || !sdata->cur_stratum_job ||
+	if (!sdata || !sdata->cur_stratum_job ||
 	    sdata->cur_stratum_job->job_state < JOB_STATE_FULL_PRIORITY_WAIT_COINBASER ||
-	    !sdata->full_coinbase_ready ||
-	    miner->coinbase_selection >= MAX_COINBASE_TYPES) return 0;
-	return miner->coinbase_selection;
+	    !sdata->full_coinbase_ready) return 0;
+	return COINBASE_TYPE_YUGE;
 }
 
 int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool new_block) {
@@ -1837,9 +1842,11 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 	// set default diff
 	m->current_diff = datum_config.stratum_v1_vardiff_min;
 	
-	// default to the antminer workaround, which appears to be universally compatible
-	// except for NiceHash.
-	m->coinbase_selection = 2;
+	// Blake miners are blind to generation-tx size. Default to YUGE so the
+	// API / logs match what datum_stratum_coinbase_index will actually
+	// commit once the coinbaser is ready. Fingerprinting may still raise
+	// NiceHash min-diff; class is forced back to YUGE after that.
+	m->coinbase_selection = COINBASE_TYPE_YUGE;
 	
 	m->useragent[0] = 0;
 	if (params_obj) {
@@ -1858,6 +1865,9 @@ int client_mining_subscribe(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 			m->current_diff = datum_config.stratum_v1_vardiff_min;
 		}
 	}
+	// Fingerprint may have overwritten class for SHA256d-era size limits.
+	// Those limits do not apply on Blake; keep NiceHash min-diff only.
+	m->coinbase_selection = COINBASE_TYPE_YUGE;
 	
 	// get a new unique session ID for this connection (extranonce1)
 	sid = get_new_session_id(c);
