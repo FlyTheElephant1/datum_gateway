@@ -2007,7 +2007,7 @@ void *datum_api_thread(void *ptr) {
 	
 	int listen_socks[1];
 	size_t listen_socks_len = 1;
-	if (!datum_sockets_setup_listening_sockets("API", datum_config.api_listen_addr, datum_config.api_listen_port, listen_socks, &listen_socks_len)) {
+	if (!datum_sockets_setup_listening_sockets("API", datum_config.api_listen_addr, datum_config.api_listen_port, listen_socks, &listen_socks_len, 10)) {
 		return NULL;
 	}
 	

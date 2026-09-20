@@ -165,7 +165,7 @@ typedef struct T_DATUM_THREAD_DATA {
 	void *app_thread_data;
 } T_DATUM_THREAD_DATA;
 
-bool datum_sockets_setup_listening_sockets(const char *purpose, const char *addr, uint16_t port, int *out_socks, size_t *inout_socks_n);
+bool datum_sockets_setup_listening_sockets(const char * const purpose, const char * const addr, const uint16_t port, int * const out_socks, size_t * const inout_socks_n, const int backlog);
 void *datum_gateway_listener_thread(void *arg);
 [[nodiscard]] bool datum_socket_set_nonblock(int sock);
 [[nodiscard]] bool datum_socket_setoptions(int sock);
