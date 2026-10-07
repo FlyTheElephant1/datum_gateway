@@ -44,6 +44,7 @@
 #include "datum_stratum.h"
 #include "datum_stratum_dupes.h"
 #include "datum_utils.h"
+#include "datum_sockets.h"
 
 void stratum_calculate_merkle_branches(T_DATUM_STRATUM_JOB *s);
 int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj);
@@ -834,6 +835,37 @@ static void datum_job_pays_current_pool_tests(void) {
 	datum_config = saved_config;
 }
 
+static void datum_socket_write_list_tests(void) {
+	T_DATUM_THREAD_DATA * const thread = calloc(1, sizeof(*thread));
+	datum_test(thread != NULL);
+	if (!thread) return;
+
+	/* A client with queued output is noted once. */
+	datum_socket_note_pending_write(thread, 5);
+	datum_test(thread->pending_writes == 1);
+	datum_test(thread->write_list[0] == 5);
+
+	/* Noting it again does not duplicate. */
+	datum_socket_note_pending_write(thread, 5);
+	datum_test(thread->pending_writes == 1);
+
+	/* A second client is added. */
+	datum_socket_note_pending_write(thread, 2);
+	datum_test(thread->pending_writes == 2);
+	datum_test(thread->write_list[1] == 2);
+
+	/* Dropping the first removes it and keeps the second. */
+	datum_socket_drop_pending_write(thread, 5);
+	datum_test(thread->pending_writes == 1);
+	datum_test(thread->write_list[0] == 2);
+
+	/* Dropping a client that was never noted is a no-op. */
+	datum_socket_drop_pending_write(thread, 9);
+	datum_test(thread->pending_writes == 1);
+
+	free(thread);
+}
+
 void datum_stratum_tests(void) {
 	datum_stratum_holds_job_tests();
 	datum_stratum_loop_holds_job_tests();
@@ -852,4 +884,5 @@ void datum_stratum_tests(void) {
 	datum_stratum_abw_block_request_tests();
 	datum_blake2b_refresh_time_offset_tests();
 	datum_block_coinbase_witness_tests();
+	datum_socket_write_list_tests();
 }
