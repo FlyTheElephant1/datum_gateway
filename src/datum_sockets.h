@@ -44,6 +44,10 @@
 #include <stdint.h>
 #include <sys/epoll.h>
 #include <pthread.h>
+#include <errno.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/socket.h>
 
 typedef struct T_DATUM_THREAD_DATA T_DATUM_THREAD_DATA;
 typedef struct T_DATUM_CLIENT_DATA T_DATUM_CLIENT_DATA;
@@ -84,6 +88,9 @@ typedef struct T_DATUM_CLIENT_DATA {
 	int proxy_line_read;
 	
 	T_DATUM_THREAD_DATA *datum_thread;
+	
+	// True while this cid is on the thread's write_list.
+	bool write_queued;
 } T_DATUM_CLIENT_DATA;
 
 typedef struct {
@@ -152,7 +159,11 @@ typedef struct T_DATUM_THREAD_DATA {
 	
 	int connected_clients;
 	int next_open_client_index;
-	
+
+	// Clients with out_buf > 0. The threadpool write pass walks this, not every slot.
+	int write_list[MAX_CLIENTS_THREAD];
+	int pending_writes;
+
 	struct epoll_event ev, events[MAX_CLIENTS_THREAD*2];
 	int epollfd;
 	
@@ -176,6 +187,26 @@ int datum_socket_send_chars_to_client(T_DATUM_CLIENT_DATA *c, char *s, int len);
 int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd);
 void *datum_threadpool_thread(void *arg);
 
+static inline void datum_socket_note_pending_write(T_DATUM_THREAD_DATA *my, int cid) {
+	if (!my || cid < 0 || cid >= MAX_CLIENTS_THREAD) return;
+	if (my->client_data[cid].write_queued) return;
+	if (my->pending_writes >= MAX_CLIENTS_THREAD) return;
+	my->client_data[cid].write_queued = true;
+	my->write_list[my->pending_writes++] = cid;
+}
+
+static inline void datum_socket_drop_pending_write(T_DATUM_THREAD_DATA *my, int cid) {
+	int i;
+	if (!my || cid < 0 || cid >= MAX_CLIENTS_THREAD) return;
+	if (!my->client_data[cid].write_queued) return;
+	my->client_data[cid].write_queued = false;
+	for (i = 0; i < my->pending_writes; i++) {
+		if (my->write_list[i] != cid) continue;
+		my->write_list[i] = my->write_list[--my->pending_writes];
+		return;
+	}
+}
+
 static inline void datum_socket_thread_client_count_decrement(T_DATUM_THREAD_DATA *my, int cid_who_left, bool not_already_locked) {
 	// compiler will optimize the if's away in most cases, since this is inline
 	if (not_already_locked) pthread_mutex_lock(&my->thread_data_lock);
@@ -188,7 +219,53 @@ static inline void datum_socket_thread_client_count_decrement(T_DATUM_THREAD_DAT
 		my->next_open_client_index = cid_who_left;
 	}
 	my->client_data[cid_who_left].fd = 0;
+	my->client_data[cid_who_left].out_buf = 0;
+	datum_socket_drop_pending_write(my, cid_who_left);
 	if (not_already_locked) pthread_mutex_unlock(&my->thread_data_lock);
+}
+
+static inline void datum_socket_flush_writes(T_DATUM_THREAD_DATA *my) {
+	if (!my) return;
+	for (int n = 0; n < my->pending_writes; ) {
+		int j = my->write_list[n];
+		if (j < 0 || j >= my->app->max_clients_thread ||
+		    my->client_data[j].fd == 0 || my->client_data[j].out_buf <= 0) {
+			if (j >= 0 && j < my->app->max_clients_thread)
+				my->client_data[j].write_queued = false;
+			my->write_list[n] = my->write_list[--my->pending_writes];
+			continue;
+		}
+		int sent = send(my->client_data[j].fd, my->client_data[j].w_buffer,
+				my->client_data[j].out_buf, MSG_DONTWAIT);
+		if (sent > 0) {
+			if (sent < my->client_data[j].out_buf) {
+				memmove(my->client_data[j].w_buffer,
+					my->client_data[j].w_buffer + sent,
+					my->client_data[j].out_buf - sent);
+			}
+			if (sent <= my->client_data[j].out_buf) {
+				my->client_data[j].out_buf -= sent;
+			} else {
+				my->client_data[j].out_buf = 0;
+			}
+			if (my->client_data[j].out_buf <= 0) {
+				my->client_data[j].out_buf = 0;
+				my->client_data[j].write_queued = false;
+				my->write_list[n] = my->write_list[--my->pending_writes];
+				continue;
+			}
+		} else {
+			if (!(errno == EAGAIN || errno == EWOULDBLOCK)) {
+				epoll_ctl(my->epollfd, EPOLL_CTL_DEL, my->client_data[j].fd, NULL);
+				close(my->client_data[j].fd);
+				if (my->app->closed_client_func)
+					my->app->closed_client_func(&my->client_data[j], "send error");
+				datum_socket_thread_client_count_decrement(my, j, true);
+				continue;
+			}
+		}
+		n++;
+	}
 }
 
 #endif
