@@ -53,6 +53,7 @@
 #define MAX_COINBASE_TYPES 6
 #define MAX_COINBASE_DATA_SIZE 100
 #define DATUM_COINBASE_ID_EMPTY 0xff
+#define DATUM_COINBASE_ID_HYBRID 0xfe
 #define COINBASE_TYPE_TINY 0 // "empty", just pays pool
 #define COINBASE_TYPE_SMALL 1 // Nicehash needs a tiny coinb1, among other things. Max 500 bytes.
 #define COINBASE_TYPE_ANTMAIN 2 // Hack for antminer stock firmware to 750 bytes
@@ -162,6 +163,8 @@ typedef struct T_DATUM_STRATUM_JOB {
 	uint8_t coinbase_data[MAX_COINBASE_DATA_SIZE];
 	int coinbase_data_len;
 	int coinbase_data_target_pot_index;
+	T_DATUM_STRATUM_COINBASE hybrid_coinbase;
+	bool hybrid_gap;
 	int target_pot_index; // where in coinb1 do we put our per-user vardiff pot value?
 	
 	uint64_t coinbase_value;
@@ -169,6 +172,7 @@ typedef struct T_DATUM_STRATUM_JOB {
 	uint16_t enprefix;
 	
 	uint64_t tsms; // local timestamp for when job was created. can differ from the bitcoin network timestamp.
+	uint64_t session_generation;
 	
 	bool is_new_block;
 	bool is_stale_prevblock;
@@ -271,6 +275,9 @@ const char *datum_stratum_mod_username(const char *username_s, char *username_bu
 int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool new_block);
 void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, int job_state);
 void datum_stratum_job_refresh_blake2b(T_DATUM_STRATUM_JOB *s);
+void datum_hybrid_coinbase_for_user(const T_DATUM_STRATUM_JOB *s, const char *username, T_DATUM_STRATUM_COINBASE *out);
+void datum_hybrid_log_pool_return(const T_DATUM_STRATUM_JOB *s);
+void datum_hybrid_session_reset(void);
 bool datum_stratum_job_blake2b_commitment_from_txn(const T_DATUM_STRATUM_JOB *s, const unsigned char *cb_txn, size_t cb_len, unsigned char target_pot, bool subsidy_only, unsigned char *commitment);
 bool datum_stratum_job_blake2b_commitment(T_DATUM_STRATUM_JOB *s, const T_DATUM_STRATUM_COINBASE *cb, bool subsidy_only, unsigned char pot, unsigned char *commitment, unsigned char *coinb1);
 bool datum_stratum_share_is_unmasked_block(

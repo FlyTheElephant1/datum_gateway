@@ -48,6 +48,7 @@
 #include <jansson.h>
 
 #include "datum_conf.h"
+#include "datum_protocol.h"
 #include "datum_jsonrpc.h"
 #include "datum_utils.h"
 #include "datum_sockets.h"
@@ -135,6 +136,12 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "mining", 		.name = "abw_verify_all_shares_on_disclosure",	.description = "Retain ABW proofs until key disclosure and alarm if the pool ignored a block",
 		.example_default = true,
 		.required = false, .ptr = &datum_config.mining_abw_verify_all_shares_on_disclosure, 	.default_bool = true },
+	{ .var_type = DATUM_CONF_BOOL,          .category = "mining",           .name = "hybrid",                       .description = "Before the pool split is ready, mine a solo coinbase and do not submit those shares. Pays the worker username when datum.pool_pass_full_users is set and the username is an address, otherwise mining.pool_address. Forced on for baked-in pool tags (Lazarus) and hybrid_pool_tags. Ignored while the pool has ABW enabled.",
+		.required = false, .ptr = &datum_config.mining_hybrid, 				.default_bool = false },
+        { .var_type = DATUM_CONF_BOOL,          .category = "mining",           .name = "debug_hybrid",                 .description = "Log the solo-gap coinbase hex when a share is found during hybrid. Not submitted to the pool.",
+                .required = false, .ptr = &datum_config.mining_debug_hybrid,                    .default_bool = false },
+	{ .var_type = DATUM_CONF_STRING, 	.category = "mining", 		.name = "hybrid_pool_tags",		.description = "Comma-separated pool coinbase tags that force hybrid on. Baked-in tags cannot be removed.",
+		.required = false, .ptr = datum_config.mining_hybrid_pool_tags,		.default_string[0] = "", .max_string_len = sizeof(datum_config.mining_hybrid_pool_tags) },
 	
 	// API/dashboard
 	{ .var_type = DATUM_CONF_STRING, 	.category = "api",	 		.name = "admin_password",			.description = "API password for actions/changes (username 'admin'; disabled if blank)",
@@ -888,4 +895,49 @@ void datum_gateway_example_conf(void) {
 		}
 	}
 	puts("\n\t}\n}");
+}
+
+static const char *datum_hybrid_builtin_tags[] = { "Lazarus", NULL };
+
+static bool datum_hybrid_tag_listed(const char *tag, const char *csv) {
+	const char *p;
+	size_t n;
+	if (!tag || !tag[0] || !csv || !csv[0]) return false;
+	p = csv;
+	while (*p) {
+		while (*p == ' ' || *p == '\t' || *p == ',') p++;
+		if (!*p) break;
+		n = 0;
+		while (p[n] && p[n] != ',') n++;
+		while (n && (p[n - 1] == ' ' || p[n - 1] == '\t')) n--;
+		if (n == strlen(tag) && !memcmp(p, tag, n)) return true;
+		p += n;
+	}
+	return false;
+}
+
+bool datum_hybrid_engaged(void) {
+	const char *pool;
+	int i;
+	if (!datum_protocol_is_active()) return false;
+	if (datum_protocol_abw_required()) return false;
+	pool = datum_config.override_mining_coinbase_tag_primary;
+	for (i = 0; datum_hybrid_builtin_tags[i]; i++) {
+		if (pool && !strcmp(pool, datum_hybrid_builtin_tags[i])) return true;
+	}
+	if (datum_hybrid_tag_listed(pool, datum_config.mining_hybrid_pool_tags)) return true;
+	return datum_config.mining_hybrid;
+}
+
+void datum_hybrid_primary_tag(char *out, size_t out_sz) {
+	const char *pool = datum_config.override_mining_coinbase_tag_primary;
+	const char *user = datum_config.mining_coinbase_tag_primary;
+	char p3[4] = {0};
+	char u5[6] = {0};
+	if (!out || !out_sz) return;
+	out[0] = 0;
+	if (!user || !user[0] || !pool || !pool[0]) return;
+	memcpy(p3, pool, strlen(pool) < 3 ? strlen(pool) : 3);
+	memcpy(u5, user, strlen(user) < 5 ? strlen(user) : 5);
+	snprintf(out, out_sz, "%s-%s", p3, u5);
 }

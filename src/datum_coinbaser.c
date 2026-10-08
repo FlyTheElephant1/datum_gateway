@@ -59,6 +59,8 @@ CURL *coinbaser_curl = NULL;
 
 const char *cbstart_hex = "01000000010000000000000000000000000000000000000000000000000000000000000000ffffffff"; // 82 len hex, 41 bytes
 
+const char *datum_coinbase_primary_tag_override = NULL;
+
 int generate_coinbase_data(int height, uint8_t *cb, int *target_pot_index, bool datum_active) {
 	int coinbase_data_size = 0;
 	int tag_len[2] = { 0, 0 };
@@ -68,6 +70,8 @@ int generate_coinbase_data(int height, uint8_t *cb, int *target_pot_index, bool 
 	// let's figure out our coinbase tags w/BIP34 height
 	i = append_UNum(height, &cb[0]);
 	coinbase_data_size += i;
+
+	if (datum_coinbase_primary_tag_override) datum_active = true;
 	
 	// Handle coinbase tagging
 	// The first push after the height should be:
@@ -76,7 +80,7 @@ int generate_coinbase_data(int height, uint8_t *cb, int *target_pot_index, bool 
 	if (!datum_active) {
 		tag_len[0] = strlen(datum_config.mining_coinbase_tag_primary);
 	} else {
-		tag_len[0] = strlen(datum_config.override_mining_coinbase_tag_primary);
+		tag_len[0] = strlen(datum_coinbase_primary_tag_override ? datum_coinbase_primary_tag_override : datum_config.override_mining_coinbase_tag_primary);
 	}
 	tag_len[1] = strlen(datum_config.mining_coinbase_tag_secondary);
 	k = tag_len[0] + tag_len[1] + 2;
@@ -130,8 +134,9 @@ int generate_coinbase_data(int height, uint8_t *cb, int *target_pot_index, bool 
 		
 		if (tag_len[0]) {
 			if (datum_active) {
+				const char *primary_tag = datum_coinbase_primary_tag_override ? datum_coinbase_primary_tag_override : datum_config.override_mining_coinbase_tag_primary;
 				for(m=0;m<tag_len[0];m++) {
-					cb[i++] = (uint8_t)datum_config.override_mining_coinbase_tag_primary[m]; ++coinbase_data_size;
+					cb[i++] = (uint8_t)primary_tag[m]; ++coinbase_data_size;
 				}
 			} else {
 				for(m=0;m<tag_len[0];m++) {
@@ -938,4 +943,153 @@ int datum_coinbaser_init(void) {
 	}
 
 	return 0;
+}
+
+static bool datum_hybrid_in_gap = false;
+static unsigned char datum_hybrid_split_prevhash_bin[32];
+static int datum_hybrid_split_prevhash_set;
+static int datum_hybrid_split_height = -1;
+static char datum_hybrid_logged_prevhash[65];
+
+void datum_job_prepare_hybrid(T_DATUM_STRATUM_JOB *s) {
+	T_DATUM_STRATUM_COINBASE saved;
+	T_DATUM_STRATUM_COINBASE saved_sub;
+	unsigned char script[64];
+	int slen;
+	char tag[16];
+	char rebuilt[STRATUM_COINBASE2_MAX_LEN];
+	char *wit;
+	char *wpos;
+	char *wit_out;
+	int n, i, prefix;
+
+	if (!s) return;
+	s->hybrid_gap = false;
+	memset(&s->hybrid_coinbase, 0, sizeof(s->hybrid_coinbase));
+	if (!datum_hybrid_engaged()) return;
+	if (datum_hybrid_split_height == s->height) return;
+	slen = addr_2_output_script(datum_config.mining_pool_address, script, sizeof(script));
+	if (slen <= 0) {
+		DLOG_WARN("hybrid: mining.pool_address is not a usable output; gap stays on the pool coinbase");
+		return;
+	}
+	datum_hybrid_primary_tag(tag, sizeof(tag));
+	saved = s->coinbase[0];
+	saved_sub = s->subsidy_only_coinbase;
+	datum_coinbase_primary_tag_override = tag[0] ? tag : "";
+	generate_base_coinbase_txns_for_stratum_job(s, s->is_new_block);
+	s->hybrid_coinbase = s->coinbase[0];
+	s->coinbase[0] = saved;
+	s->subsidy_only_coinbase = saved_sub;
+	datum_coinbase_primary_tag_override = NULL;
+
+	wit = s->block_template ? s->block_template->default_witness_commitment : NULL;
+	wpos = (wit && wit[0]) ? strstr(s->hybrid_coinbase.coinb2, wit) : NULL;
+	if (!wpos || wpos < s->hybrid_coinbase.coinb2 + 18) {
+		DLOG_WARN("hybrid: could not rebuild solo coinbase; gap stays on the pool coinbase");
+		memset(&s->hybrid_coinbase, 0, sizeof(s->hybrid_coinbase));
+		return;
+	}
+	wit_out = wpos - 18;
+	prefix = !strncmp(s->hybrid_coinbase.coinb2, "ffffffff", 8) ? 8 : 0;
+	memcpy(rebuilt, s->hybrid_coinbase.coinb2, prefix);
+	n = prefix;
+	if (prefix == 8) n += sprintf(rebuilt + n, "02");
+	n += sprintf(rebuilt + n, "%016llx", (unsigned long long)__builtin_bswap64(s->coinbase_value));
+	n += append_bitcoin_varint_hex(slen, rebuilt + n);
+	for (i = 0; i < slen; i++) {
+		uchar_to_hex(rebuilt + n, script[i]);
+		n += 2;
+	}
+	if (n + strlen(wit_out) >= sizeof(rebuilt)) {
+		DLOG_WARN("hybrid: solo coinbase does not fit; gap stays on the pool coinbase");
+		memset(&s->hybrid_coinbase, 0, sizeof(s->hybrid_coinbase));
+		return;
+	}
+	memcpy(rebuilt + n, wit_out, strlen(wit_out) + 1);
+	memcpy(s->hybrid_coinbase.coinb2, rebuilt, strlen(rebuilt) + 1);
+	s->hybrid_coinbase.coinb2_len = 0;
+	for (i = 0; s->hybrid_coinbase.coinb2[i] && s->hybrid_coinbase.coinb2[i + 1]; i += 2) {
+		s->hybrid_coinbase.coinb2_bin[i >> 1] = hex2bin_uchar(&s->hybrid_coinbase.coinb2[i]);
+		s->hybrid_coinbase.coinb2_len++;
+	}
+	s->hybrid_gap = true;
+	if (!datum_hybrid_in_gap || strncmp(s->prevhash, datum_hybrid_logged_prevhash, 64)) {
+                datum_hybrid_in_gap = true;
+		memcpy(datum_hybrid_logged_prevhash, s->prevhash, 64);
+		datum_hybrid_logged_prevhash[64] = 0;
+                DLOG_INFO("hybrid: height %d -> solo gap, payout=%s, tag=\"%s\"",
+                        s->height, datum_config.mining_pool_address, tag);
+        }
+}
+
+void datum_hybrid_session_reset(void) {
+	datum_hybrid_in_gap = false;
+	datum_hybrid_split_height = -1;
+	datum_hybrid_split_prevhash_set = 0;
+	datum_hybrid_logged_prevhash[0] = 0;
+}
+
+void datum_hybrid_log_pool_return(const T_DATUM_STRATUM_JOB *s) {
+	if (!s || !__atomic_exchange_n(&datum_hybrid_in_gap, false, __ATOMIC_ACQ_REL)) return;
+	memcpy(datum_hybrid_split_prevhash_bin, s->prevhash_bin, 32);
+	datum_hybrid_split_prevhash_set = 1;
+	datum_hybrid_split_height = s->height;
+	DLOG_INFO("hybrid: height %d solo gap -> pool split, outputs=%d",
+		s->height, s->available_coinbase_outputs_count);
+}
+
+static const char *datum_hybrid_payout_addr(const char *username, char *buf, size_t buf_sz) {
+	const char *dot;
+	size_t n;
+	unsigned char script[64];
+	if (!datum_config.datum_pool_pass_full_users || !username || !username[0] || !buf || buf_sz < 8)
+		return datum_config.mining_pool_address;
+	dot = strchr(username, '.');
+	n = dot ? (size_t)(dot - username) : strlen(username);
+	if (!n || n >= buf_sz) return datum_config.mining_pool_address;
+	memcpy(buf, username, n);
+	buf[n] = 0;
+	if (addr_2_output_script(buf, script, sizeof(script)) <= 0)
+		return datum_config.mining_pool_address;
+	return buf;
+}
+
+void datum_hybrid_coinbase_for_user(const T_DATUM_STRATUM_JOB *s, const char *username, T_DATUM_STRATUM_COINBASE *out) {
+	char addrbuf[128];
+	const char *addr;
+	unsigned char script[64];
+	int slen, n, i, prefix;
+	char rebuilt[STRATUM_COINBASE2_MAX_LEN];
+	char *wit;
+	char *wpos;
+	char *wit_out;
+	if (!s || !out) return;
+	*out = s->hybrid_coinbase;
+	addr = datum_hybrid_payout_addr(username, addrbuf, sizeof(addrbuf));
+	if (!addr || !strcmp(addr, datum_config.mining_pool_address)) return;
+	slen = addr_2_output_script(addr, script, sizeof(script));
+	if (slen <= 0) return;
+	wit = s->block_template ? s->block_template->default_witness_commitment : NULL;
+	wpos = (wit && wit[0]) ? strstr(out->coinb2, wit) : NULL;
+	if (!wpos || wpos < out->coinb2 + 18) return;
+	wit_out = wpos - 18;
+	prefix = !strncmp(out->coinb2, "ffffffff", 8) ? 8 : 0;
+	memcpy(rebuilt, out->coinb2, prefix);
+	n = prefix;
+	if (prefix == 8) n += sprintf(rebuilt + n, "02");
+	n += sprintf(rebuilt + n, "%016llx", (unsigned long long)__builtin_bswap64(s->coinbase_value));
+	n += append_bitcoin_varint_hex(slen, rebuilt + n);
+	for (i = 0; i < slen; i++) {
+		uchar_to_hex(rebuilt + n, script[i]);
+		n += 2;
+	}
+	if (n + strlen(wit_out) >= sizeof(rebuilt)) return;
+	memcpy(rebuilt + n, wit_out, strlen(wit_out) + 1);
+	memcpy(out->coinb2, rebuilt, strlen(rebuilt) + 1);
+	out->coinb2_len = 0;
+	for (i = 0; out->coinb2[i] && out->coinb2[i + 1]; i += 2) {
+		out->coinb2_bin[i >> 1] = hex2bin_uchar(&out->coinb2[i]);
+		out->coinb2_len++;
+	}
 }

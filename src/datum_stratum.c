@@ -58,6 +58,7 @@
 #include "datum_coinbaser.h"
 #include "datum_submitblock.h"
 #include "datum_protocol.h"
+#include "datum_protocol_internal.h"
 #include "datum_pow.h"
 
 T_DATUM_SOCKET_APP *global_stratum_app = NULL;
@@ -441,6 +442,12 @@ void datum_stratum_v1_socket_thread_loop(T_DATUM_THREAD_DATA *my) {
 	pthread_rwlock_rdlock(&stratum_global_job_ptr_lock);
 	if (global_latest_stratum_job_index != sdata->latest_stratum_job_index) {
 		change_ready = true;
+		if (datum_hybrid_engaged() && sdata->cur_stratum_job &&
+		    sdata->last_job_height == global_cur_stratum_jobs[global_latest_stratum_job_index]->height &&
+		    global_cur_stratum_jobs[global_latest_stratum_job_index]->need_coinbaser &&
+		    !stratum_job_coinbaser_ready(sdata, global_cur_stratum_jobs[global_latest_stratum_job_index])) {
+			change_ready = false;
+		}
 		if ((sdata->last_was_empty) && (global_cur_stratum_jobs[global_latest_stratum_job_index]->job_state >= JOB_STATE_FULL_PRIORITY_WAIT_COINBASER)) {
 			// we went from an empty to a coinbaser wait job somehow...
 			// we don't want to delay our full work blast, however...
@@ -555,10 +562,11 @@ void datum_stratum_v1_socket_thread_loop(T_DATUM_THREAD_DATA *my) {
 				sdata->full_coinbase_ready = false;
 				if (stratum_job_coinbaser_ready(sdata,job)) { // will set sdata->full_coinbase_ready = true if it's really ready.  if it times out, it will not.
 					DLOG_DEBUG("Blasting full work for type 4 job thread %d",my->thread_id);
+					if (sdata->full_coinbase_ready) datum_hybrid_log_pool_return(job);
 					for(i=0;i<my->app->max_clients_thread;i++) {
 						m = my->client_data[i].app_client_data;
 						if (my->client_data[i].fd && m->subscribed) {
-							send_mining_notify(&my->client_data[i],false,false,false);
+							send_mining_notify(&my->client_data[i], job->hybrid_gap, false, false);
 						}
 					}
 					
@@ -572,6 +580,7 @@ void datum_stratum_v1_socket_thread_loop(T_DATUM_THREAD_DATA *my) {
 			case 5: {
 				sdata->full_coinbase_ready = false;
 				if (stratum_job_coinbaser_ready(sdata,job)) {
+					if (sdata->full_coinbase_ready) datum_hybrid_log_pool_return(job);
 					// this is a normal job that normally gets slowly sent out over the course of the work change time until interupted by a new block
 					if (sdata->last_was_empty) {
 						// HOWEVER...
@@ -954,6 +963,9 @@ bool stratum_get_job(const T_DATUM_MINER_DATA * const m, const json_t * const jo
 			// new block empty work.  means we use coinbase 0 and we have no merkle leafs
 			job_id_s++;
 			*out_empty_work = true;
+		} else if ((strlen(job_id_s) == 17) && (job_id_s[0] == 'H')) {
+			// hybrid gap: solo coinbase, full template, not a Prime share
+			job_id_s++;
 		} else {
 			return false;
 		}
@@ -990,7 +1002,8 @@ bool stratum_get_job(const T_DATUM_MINER_DATA * const m, const json_t * const jo
 	
 	*out_coinbase_index = hex2bin_uchar(&job_id_s[0xE]);
 	if (*out_coinbase_index >= MAX_COINBASE_TYPES) {
-		if (!(*out_empty_work && *out_coinbase_index == DATUM_COINBASE_ID_EMPTY)) {
+		if (!((*out_empty_work && *out_coinbase_index == DATUM_COINBASE_ID_EMPTY) ||
+		      *out_coinbase_index == DATUM_COINBASE_ID_HYBRID)) {
 			return false;
 		}
 	}
@@ -1122,8 +1135,12 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	}
 	
 	// need to build the full coinbase txn
+	T_DATUM_STRATUM_COINBASE hybrid_cb;
 	if (empty_work) {
 		cb = &job->subsidy_only_coinbase;
+	} else if (coinbase_index == DATUM_COINBASE_ID_HYBRID) {
+		datum_hybrid_coinbase_for_user(job, m->last_auth_username, &hybrid_cb);
+		cb = &hybrid_cb;
 	} else {
 		cb = &job->coinbase[coinbase_index];
 	}
@@ -1251,7 +1268,9 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		DLOG_WARN("******** BLOCK FOUND - %s ********", new_notify_blockhash);
 		DLOG_WARN("************************************************************************************************");
 		
-		if (job->is_datum_job) {
+		if (job->is_datum_job && coinbase_index != DATUM_COINBASE_ID_HYBRID &&
+		    job->session_generation == atomic_load(&datum_session_generation) &&
+		    datum_protocol_is_active()) {
 			(void)datum_protocol_pow_submit(c, job, username_s, true,
 				empty_work, quickdiff, block_header, job_diff,
 				full_cb_txn, full_cb_txn_size, share_hash, cb,
@@ -1315,8 +1334,17 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		return 0;
 	}
 	
+        if (datum_config.mining_debug_hybrid && coinbase_index == DATUM_COINBASE_ID_HYBRID) {
+                char cbhex[full_cb_txn_size * 2 + 1];
+                for (i = 0; i < (int)full_cb_txn_size; i++) uchar_to_hex(&cbhex[i << 1], full_cb_txn[i]);
+                cbhex[full_cb_txn_size * 2] = 0;
+                DLOG_INFO("hybrid-debug: height %d nonce %s user %s coinbase %s", job->height, nonce_s ? nonce_s : "", username_s ? username_s : "", cbhex);
+        }
+	
 	// work accepted
-	if (job->is_datum_job && !was_block && datum_protocol_pow_submit(c, job,
+	if (job->is_datum_job && coinbase_index != DATUM_COINBASE_ID_HYBRID && !was_block &&
+	    job->session_generation == atomic_load(&datum_session_generation) &&
+	    datum_protocol_is_active() && datum_protocol_pow_submit(c, job,
 		username_s, false, empty_work, quickdiff, block_header, job_diff, full_cb_txn,
 		full_cb_txn_size, share_hash, cb, extranonce_bin,
 		coinbase_index) != 0) {
@@ -1430,6 +1458,9 @@ int client_mining_authorize(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_
 unsigned int datum_stratum_coinbase_index(
 	const T_DATUM_STRATUM_THREADPOOL_DATA *sdata,
 	const T_DATUM_MINER_DATA *miner, bool new_block) {
+	if (sdata && sdata->cur_stratum_job && sdata->cur_stratum_job->hybrid_gap &&
+	    !sdata->full_coinbase_ready)
+		return DATUM_COINBASE_ID_HYBRID;
 	if (new_block) return DATUM_COINBASE_ID_EMPTY;
 	if (!sdata || !miner || !sdata->cur_stratum_job ||
 	    sdata->cur_stratum_job->job_state < JOB_STATE_FULL_PRIORITY_WAIT_COINBASER ||
@@ -1531,12 +1562,17 @@ int send_mining_notify(T_DATUM_CLIENT_DATA *c, bool clean, bool quickdiff, bool 
 	
 	cbselect = datum_stratum_coinbase_index(sdata, m, new_block);
 	const bool subsidy_only = cbselect == DATUM_COINBASE_ID_EMPTY;
-	cb = subsidy_only ? &j->subsidy_only_coinbase : &j->coinbase[cbselect];
+	const bool hybrid_work = cbselect == DATUM_COINBASE_ID_HYBRID;
+	T_DATUM_STRATUM_COINBASE hybrid_cb;
+	if (hybrid_work) datum_hybrid_coinbase_for_user(j, m->last_auth_username, &hybrid_cb);
+	cb = subsidy_only ? &j->subsidy_only_coinbase : (hybrid_work ? &hybrid_cb : &j->coinbase[cbselect]);
 	
 	if (quickdiff) {
 		snprintf(s, sizeof(s), "\"Q%s%2.2x\",\"%s\",\"", j->job_id, cbselect, j->prevhash);
 	} else if (subsidy_only) {
 		snprintf(s, sizeof(s), "\"N%s%2.2x\",\"%s\",\"", j->job_id, cbselect, j->prevhash);
+	} else if (hybrid_work) {
+		snprintf(s, sizeof(s), "\"H%s%2.2x\",\"%s\",\"", j->job_id, cbselect, j->prevhash);
 	} else {
 		snprintf(s, sizeof(s), "\"%s%2.2x\",\"%s\",\"", j->job_id, cbselect, j->prevhash);
 	}
@@ -2023,11 +2059,13 @@ void update_stratum_job(T_DATUM_TEMPLATE_DATA *block_template, bool new_block, i
 	// we're new, not stale
 	s->is_stale_prevblock = false;
 	
+	s->session_generation = atomic_load(&datum_session_generation);
 	// start as not a datum job.  if we have coinbase data and such for it down the line, this will get updated.
 	s->is_datum_job = false;
 	
 	// prep the coinbase txn(s) for this job
 	generate_base_coinbase_txns_for_stratum_job(s, s->is_new_block);
+	datum_job_prepare_hybrid(s);
 	
 	s->job_state = job_state;
 	if ((job_state == JOB_STATE_FULL_PRIORITY_WAIT_COINBASER) || (job_state == JOB_STATE_FULL_NORMAL_WAIT_COINBASER)) {

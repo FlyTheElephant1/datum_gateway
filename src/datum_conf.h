@@ -137,6 +137,9 @@ typedef struct {
 	char mining_save_submitblocks_dir[256];
 	bool mining_allow_hasher_time_rolling;
 	bool mining_abw_verify_all_shares_on_disclosure;
+	bool mining_hybrid;
+	bool mining_debug_hybrid;
+	char mining_hybrid_pool_tags[256];
 	int coinbase_unique_id;
 	
 	char api_admin_password[72];
@@ -213,5 +216,7 @@ size_t datum_expected_n_global_nonstale_shares(const global_config_t * const cfg
 	
 	return overflow ? 0 : (size_t)c;
 }
+bool datum_hybrid_engaged(void);
+void datum_hybrid_primary_tag(char *out, size_t out_sz);
 
 #endif
