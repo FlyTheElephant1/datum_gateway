@@ -3011,6 +3011,8 @@ void *datum_protocol_client(void *args) {
 	pthread_mutex_unlock(&datum_protocol_sender_stage1_lock);
 	datum_protocol_bulk_reset();
 	atomic_store(&datum_protocol_bulk_enabled, false);
+	datum_hybrid_session_reset();
+	datum_blocktemplates_notify_othercause();
 	datum_state = 0;
 	memset(&s_header, 0, sizeof(T_DATUM_PROTOCOL_HEADER));
 	
@@ -3366,7 +3368,10 @@ void *datum_protocol_client(void *args) {
 	DLOG_DEBUG("DATUM Protocol Thread is exiting.");
 	close(sockfd);
 	close(epollfd);
+	atomic_fetch_add(&datum_session_generation, 1);
+	datum_hybrid_session_reset();
 	datum_protocol_client_active = 0;
+	datum_blocktemplates_notify_othercause();
 	
 	// Wait up to 5 seconds for another thread to reconnect
 	for (i = 2000; i; --i) {
