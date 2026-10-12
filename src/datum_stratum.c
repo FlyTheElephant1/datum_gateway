@@ -423,9 +423,17 @@ bool stratum_job_coinbaser_ready(T_DATUM_STRATUM_THREADPOOL_DATA *sdata, T_DATUM
 	// backup timeout for coinbaser on these jobs
 	// (only once we know it isn't here: this thread may be looking at the job late)
 	if ((sdata->loop_tsms > job->tsms) && (sdata->loop_tsms - job->tsms) > 5000) {
-		// enforce a timeout of 5 seconds on waiting on a coinbaser...
-		sdata->full_coinbase_ready = false;
-		return true;
+                /*
+                 * Same height, same tip: Prime has no clock on this job. Blasting
+                 * it without the reply sends a coinbase it did not issue. Stay on
+                 * the prior job and retire this one when the next template lands.
+                 * New height keeps the 5s give-up so a gateway without hybrid is
+                 * not stuck on a tip Prime has already moved past (30s stale grace).
+                 */
+                if (sdata->last_job_height != job->height) {
+                        sdata->full_coinbase_ready = false;
+                        return true;
+                }
 	}
 	
 	return false;

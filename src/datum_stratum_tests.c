@@ -253,7 +253,16 @@ static void datum_stratum_coinbaser_ready_tests(void) {
 	datum_test(!stratum_job_coinbaser_ready(sdata, &job));
 	datum_test(!sdata->full_coinbase_ready);
 	
-	// Gave up waiting after 5 seconds
+        // Same height: do not give up. The prior job is still the tip.
+        job.height = 100;
+        sdata->last_job_height = 100;
+        sdata->loop_tsms = job.tsms + 5001;
+        datum_test(!stratum_job_coinbaser_ready(sdata, &job));
+        datum_test(!sdata->full_coinbase_ready);
+
+        // New height: give up after 5 seconds so a gateway is not stuck
+        // on a tip Prime will call stale.
+        sdata->last_job_height = 99;
 	sdata->loop_tsms = job.tsms + 5001;
 	datum_test(stratum_job_coinbaser_ready(sdata, &job));
 	datum_test(!sdata->full_coinbase_ready);
