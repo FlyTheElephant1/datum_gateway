@@ -417,6 +417,18 @@ void generate_base_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool ne
 	int target_pot_index;
 	
 	if (datum_protocol_is_active()) {
+                /*
+                 * Re-read the live override. This function also runs when the
+                 * coinbaser reply arrives, and a configure may have moved the
+                 * pool script since the job was built. The snapshot taken at
+                 * job-build time is what produced bad_coinbase_outputs (27)
+                 * on the job that straddled the configure.
+                 */
+                if (s->pool_addr_script_len != datum_config.override_mining_pool_scriptpubkey_len ||
+                    memcmp(s->pool_addr_script, datum_config.override_mining_pool_scriptpubkey,
+                           datum_config.override_mining_pool_scriptpubkey_len) != 0) {
+                        DLOG_INFO("pool script moved before coinbase build: refreshing job %d", s->height);
+                }
 		// DATUM
 		s->pool_addr_script_len = datum_config.override_mining_pool_scriptpubkey_len;
 		memcpy(&s->pool_addr_script[0], datum_config.override_mining_pool_scriptpubkey, datum_config.override_mining_pool_scriptpubkey_len);
