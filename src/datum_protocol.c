@@ -2052,7 +2052,35 @@ int datum_protocol_share_response(const int len, unsigned char * const data) {
 			           target_pot,
 			           job_id,
 			           nonce);
-			
+                       if (reject_reason == DATUM_REJECT_BAD_COINBASE ||
+                            reject_reason == DATUM_REJECT_BAD_COINBASE_OUTPUTS ||
+                            reject_reason == DATUM_REJECT_MISSING_POOL_TAG) {
+                                char job_hex[MAX_OUTPUT_SCRIPT_LEN * 2 + 1];
+                                char cur_hex[MAX_OUTPUT_SCRIPT_LEN * 2 + 1];
+                                int job_script_len = 0;
+                                T_DATUM_STRATUM_JOB *sj = NULL;
+
+                                job_hex[0] = 0;
+                                cur_hex[0] = 0;
+                                pthread_rwlock_rdlock(&datum_jobs_rwlock);
+                                if (job_id < MAX_DATUM_PROTOCOL_JOBS) sj = datum_jobs[job_id].sjob;
+                                if (sj && sj->pool_addr_script_len > 0 &&
+                                    sj->pool_addr_script_len <= MAX_OUTPUT_SCRIPT_LEN) {
+                                        job_script_len = sj->pool_addr_script_len;
+                                        job_hex[bytes_to_hex(job_hex, sj->pool_addr_script, job_script_len)] = 0;
+                                }
+                                pthread_rwlock_unlock(&datum_jobs_rwlock);
+                                if (datum_config.override_mining_pool_scriptpubkey_len > 0 &&
+                                    datum_config.override_mining_pool_scriptpubkey_len <= MAX_OUTPUT_SCRIPT_LEN) {
+                                        cur_hex[bytes_to_hex(cur_hex, datum_config.override_mining_pool_scriptpubkey,
+                                                datum_config.override_mining_pool_scriptpubkey_len)] = 0;
+                                }
+                                DLOG_ERROR("coinbase reject detail: job script=%s (%d) current override=%s (%d)",
+                                        job_hex[0] ? job_hex : "(none)", job_script_len,
+                                        cur_hex[0] ? cur_hex : "(none)",
+                                        datum_config.override_mining_pool_scriptpubkey_len);
+                        }
+
 			++datum_rejected_share_count;
 			if (target_pot != 0xFF) {
 				datum_protocol_add_share_diff(&datum_rejected_share_diff, target_pot);

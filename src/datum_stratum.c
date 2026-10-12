@@ -1270,6 +1270,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 		
 		if (job->is_datum_job && coinbase_index != DATUM_COINBASE_ID_HYBRID &&
 		    job->session_generation == atomic_load(&datum_session_generation) &&
+                    !job->need_coinbaser &&
 		    datum_protocol_is_active()) {
 			(void)datum_protocol_pow_submit(c, job, username_s, true,
 				empty_work, quickdiff, block_header, job_diff,
@@ -1344,6 +1345,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 	// work accepted
 	if (job->is_datum_job && coinbase_index != DATUM_COINBASE_ID_HYBRID && !was_block &&
 	    job->session_generation == atomic_load(&datum_session_generation) &&
+            !job->need_coinbaser &&
 	    datum_protocol_is_active() && datum_protocol_pow_submit(c, job,
 		username_s, false, empty_work, quickdiff, block_header, job_diff, full_cb_txn,
 		full_cb_txn_size, share_hash, cb, extranonce_bin,
