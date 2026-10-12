@@ -986,6 +986,10 @@ void datum_job_prepare_hybrid(T_DATUM_STRATUM_JOB *s) {
 		return;
 	}
 	datum_hybrid_primary_tag(tag, sizeof(tag));
+	unsigned char saved_script[MAX_OUTPUT_SCRIPT_LEN];
+	int saved_script_len = s->pool_addr_script_len;
+	if (saved_script_len > 0 && saved_script_len <= MAX_OUTPUT_SCRIPT_LEN)
+		memcpy(saved_script, s->pool_addr_script, saved_script_len);
 	saved = s->coinbase[0];
 	saved_sub = s->subsidy_only_coinbase;
 	datum_coinbase_primary_tag_override = tag[0] ? tag : "";
@@ -993,6 +997,10 @@ void datum_job_prepare_hybrid(T_DATUM_STRATUM_JOB *s) {
 	s->hybrid_coinbase = s->coinbase[0];
 	s->coinbase[0] = saved;
 	s->subsidy_only_coinbase = saved_sub;
+	if (saved_script_len > 0 && saved_script_len <= MAX_OUTPUT_SCRIPT_LEN) {
+		s->pool_addr_script_len = saved_script_len;
+		memcpy(s->pool_addr_script, saved_script, saved_script_len);
+	}
 	datum_coinbase_primary_tag_override = NULL;
 
 	wit = s->block_template ? s->block_template->default_witness_commitment : NULL;
