@@ -424,9 +424,10 @@ void generate_base_coinbase_txns_for_stratum_job(T_DATUM_STRATUM_JOB *s, bool ne
                  * job-build time is what produced bad_coinbase_outputs (27)
                  * on the job that straddled the configure.
                  */
-                if (s->pool_addr_script_len != datum_config.override_mining_pool_scriptpubkey_len ||
-                    memcmp(s->pool_addr_script, datum_config.override_mining_pool_scriptpubkey,
-                           datum_config.override_mining_pool_scriptpubkey_len) != 0) {
+                if (s->pool_addr_script_len > 0 &&
+                    (s->pool_addr_script_len != datum_config.override_mining_pool_scriptpubkey_len ||
+                     memcmp(s->pool_addr_script, datum_config.override_mining_pool_scriptpubkey,
+                            s->pool_addr_script_len) != 0)) {
                         DLOG_INFO("pool script moved before coinbase build: refreshing job %d", s->height);
                 }
 		// DATUM
