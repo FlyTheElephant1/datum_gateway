@@ -987,17 +987,11 @@ void datum_job_prepare_hybrid(T_DATUM_STRATUM_JOB *s) {
 		return;
 	}
 	datum_hybrid_primary_tag(tag, sizeof(tag));
-	/*
-	 * The first generate_base may have run before the protocol was active
-	 * and baked mining.pool_address. Restoring that coinbase onto a job the
-	 * second call has just marked as a datum job is the startup-height 27:
-	 * the job is registered and sent with the local script, and same-height
-	 * updates leave it live. Only restore a coinbase that was already a
-	 * pool coinbase. Otherwise keep what the second call just built.
-	 */
+	/* Always restore. The second generate_base exists only to seed the
+	 * solo coinbase. Leaving its output in coinbase[0] is what put the
+	 * local script on a registered job at 976937. */
 	unsigned char saved_script[MAX_OUTPUT_SCRIPT_LEN];
 	int saved_script_len = s->pool_addr_script_len;
-	bool saved_is_datum = s->is_datum_job;
 	if (saved_script_len > 0 && saved_script_len <= MAX_OUTPUT_SCRIPT_LEN)
 		memcpy(saved_script, s->pool_addr_script, saved_script_len);
 	saved = s->coinbase[0];
@@ -1005,13 +999,11 @@ void datum_job_prepare_hybrid(T_DATUM_STRATUM_JOB *s) {
 	datum_coinbase_primary_tag_override = tag[0] ? tag : "";
 	generate_base_coinbase_txns_for_stratum_job(s, s->is_new_block);
 	s->hybrid_coinbase = s->coinbase[0];
-	if (saved_is_datum) {
-		s->coinbase[0] = saved;
-		s->subsidy_only_coinbase = saved_sub;
-		if (saved_script_len > 0 && saved_script_len <= MAX_OUTPUT_SCRIPT_LEN) {
-			s->pool_addr_script_len = saved_script_len;
-			memcpy(s->pool_addr_script, saved_script, saved_script_len);
-		}
+	s->coinbase[0] = saved;
+	s->subsidy_only_coinbase = saved_sub;
+	if (saved_script_len > 0 && saved_script_len <= MAX_OUTPUT_SCRIPT_LEN) {
+		s->pool_addr_script_len = saved_script_len;
+		memcpy(s->pool_addr_script, saved_script, saved_script_len);
 	}
 	datum_coinbase_primary_tag_override = NULL;
 
