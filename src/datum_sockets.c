@@ -113,6 +113,12 @@ void *datum_threadpool_thread(void *arg) {
 		return 0;
 	}
 	
+	my->wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (my->wake_fd >= 0) {
+		struct epoll_event wev = { .events = EPOLLIN, .data.u64 = (uint64_t)-1 };
+		epoll_ctl(my->epollfd, EPOLL_CTL_ADD, my->wake_fd, &wev);
+	}
+	
 	// Call application specific thread init
 	if (my->app->init_func) my->app->init_func(my);
 	
@@ -239,7 +245,7 @@ void *datum_threadpool_thread(void *arg) {
 		}
 		
 		// check if we have any data to read from any existing clients
-		nfds = epoll_wait(my->epollfd, my->events, MAX_EVENTS, 7);
+		nfds = epoll_wait(my->epollfd, my->events, MAX_EVENTS, -1);
 		if (nfds < 0) {
 			if (errno != EINTR) {
 				DLOG_ERROR("epoll_wait returned %d", nfds);
@@ -251,6 +257,11 @@ void *datum_threadpool_thread(void *arg) {
 			for(i=0;i<nfds;i++) {
 				cidx = my->events[i].data.u64;
 				
+				if (cidx == (uint64_t)-1) {
+					uint64_t v;
+					while (read(my->wake_fd, &v, sizeof(v)) > 0) {}
+					continue;
+				}
 				if (cidx >= 0) {
 					n = recv(my->client_data[cidx].fd, &my->client_data[cidx].buffer[my->client_data[cidx].in_buf], CLIENT_BUFFER - 1 - my->client_data[cidx].in_buf, MSG_DONTWAIT);
 					if (n <= 0) {
@@ -551,6 +562,7 @@ int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd) {
 	app->datum_threads[tid].client_data[cid].in_buf = 0;
 	app->datum_threads[tid].client_data[cid].out_buf = 0;
 	app->datum_threads[tid].has_new_clients = true;
+	datum_socket_wake_thread(&app->datum_threads[tid]);
 	
 	pthread_mutex_unlock(&app->datum_threads[tid].thread_data_lock);
 	

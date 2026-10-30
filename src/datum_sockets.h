@@ -44,6 +44,8 @@
 #include <stdint.h>
 #include <sys/epoll.h>
 #include <pthread.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 typedef struct T_DATUM_THREAD_DATA T_DATUM_THREAD_DATA;
 typedef struct T_DATUM_CLIENT_DATA T_DATUM_CLIENT_DATA;
@@ -159,6 +161,7 @@ typedef struct T_DATUM_THREAD_DATA {
 
 	struct epoll_event ev, events[MAX_CLIENTS_THREAD*2];
 	int epollfd;
+	int wake_fd;
 	
 	// information for this socket application
 	// this is global to the socket application
@@ -180,6 +183,13 @@ int datum_socket_send_chars_to_client(T_DATUM_CLIENT_DATA *c, char *s, int len);
 int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd);
 void *datum_threadpool_thread(void *arg);
 
+static inline void datum_socket_wake_thread(T_DATUM_THREAD_DATA *my) {
+        uint64_t one = 1;
+        if (my && my->wake_fd >= 0) {
+                (void)write(my->wake_fd, &one, sizeof(one));
+        }
+}
+
 static inline void datum_socket_note_pending_write(T_DATUM_THREAD_DATA *my, int cid) {
 	int i;
 	if (!my || cid < 0 || cid >= MAX_CLIENTS_THREAD) return;
@@ -188,6 +198,8 @@ static inline void datum_socket_note_pending_write(T_DATUM_THREAD_DATA *my, int 
 	}
 	if (my->pending_writes >= MAX_CLIENTS_THREAD) return;
 	my->write_list[my->pending_writes++] = cid;
+
+	datum_socket_wake_thread(my);
 }
 
 static inline void datum_socket_drop_pending_write(T_DATUM_THREAD_DATA *my, int cid) {
