@@ -560,7 +560,7 @@ int assign_to_thread(T_DATUM_SOCKET_APP *app, int fd) {
 	return 1;
 }
 
-const char *datum_sockets_setup_listen_sock(const int listen_sock, const struct sockaddr * const sa, const size_t sa_len) {
+const char *datum_sockets_setup_listen_sock(const int listen_sock, const struct sockaddr * const sa, const size_t sa_len, const int backlog) {
 	if (-1 == listen_sock) {
 		return "Could not create listening socket";
 	}
@@ -578,14 +578,18 @@ const char *datum_sockets_setup_listen_sock(const int listen_sock, const struct 
 		return "bind failed";
 	}
 	
-	if (listen(listen_sock, 10) < 0) {
+	if (backlog < 1) {
+		return "backlog must be at least 1";
+	}
+	
+	if (listen(listen_sock, backlog) < 0) {
 		return "listen failed";
 	}
 	
 	return NULL;
 }
 
-bool datum_sockets_setup_listening_sockets(const char * const purpose, const char * const addr, const uint16_t port, int * const out_socks, size_t * const inout_socks_n) {
+bool datum_sockets_setup_listening_sockets(const char * const purpose, const char * const addr, const uint16_t port, int * const out_socks, size_t * const inout_socks_n, const int backlog) {
 	assert(*inout_socks_n > 0);
 	if (addr && addr[0]) {
 		char port_str[6];
@@ -604,7 +608,7 @@ bool datum_sockets_setup_listening_sockets(const char * const purpose, const cha
 			return false;
 		}
 		*out_socks = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
-		const char *errstr = datum_sockets_setup_listen_sock(*out_socks, res->ai_addr, res->ai_addrlen);
+		const char *errstr = datum_sockets_setup_listen_sock(*out_socks, res->ai_addr, res->ai_addrlen, backlog);
 		const int errno_saved = errno;
 		freeaddrinfo(res);
 		if (errstr) {
@@ -626,7 +630,7 @@ bool datum_sockets_setup_listening_sockets(const char * const purpose, const cha
 			setsockopt(out_socks[0], IPPROTO_IPV6, IPV6_V6ONLY, &zero, sizeof(zero));
 		}
 #endif
-		const char * const errstr6 = datum_sockets_setup_listen_sock(out_socks[0], (const struct sockaddr *)&anyaddr6, sizeof(anyaddr6));
+		const char * const errstr6 = datum_sockets_setup_listen_sock(out_socks[0], (const struct sockaddr *)&anyaddr6, sizeof(anyaddr6), backlog);
 		const int errno6 = errno;
 		unsigned int socks_n = 1;
 		if (errstr6 && out_socks[0] != -1) {
@@ -642,7 +646,7 @@ bool datum_sockets_setup_listening_sockets(const char * const purpose, const cha
 				.sin_addr.s_addr = INADDR_ANY,
 			};
 			out_socks[socks_n] = socket(AF_INET, SOCK_STREAM, 0);
-			const char *errstr = datum_sockets_setup_listen_sock(out_socks[socks_n], (const struct sockaddr *)&anyaddr4, sizeof(anyaddr4));
+			const char *errstr = datum_sockets_setup_listen_sock(out_socks[socks_n], (const struct sockaddr *)&anyaddr4, sizeof(anyaddr4), backlog);
 			if (errstr && errstr6) {
 				const int errno4 = errno;
 				DLOG_FATAL("%s (IPv6): %s", errstr6, strerror(errno6));
@@ -680,7 +684,7 @@ void *datum_gateway_listener_thread(void *arg) {
 		return NULL;
 	}
 	
-	DLOG_DEBUG("Setting up app '%s' on address %s port %d. (T:%d/TC:%d/C:%d)", app->name, datum_config.stratum_v1_listen_addr[0] ? datum_config.stratum_v1_listen_addr : "(any)", app->listen_port, app->max_threads, app->max_clients_thread, app->max_clients);
+	DLOG_DEBUG("Setting up app '%s' on address %s port %d. (T:%d/TC:%d/C:%d/backlog:%d)", app->name, datum_config.stratum_v1_listen_addr[0] ? datum_config.stratum_v1_listen_addr : "(any)", app->listen_port, app->max_threads, app->max_clients_thread, app->max_clients, datum_config.stratum_v1_listen_backlog);
 	
 	// we assume the caller sets up the thread data in some way
 	// don't clobber those pointers
@@ -702,7 +706,7 @@ void *datum_gateway_listener_thread(void *arg) {
 	app->datum_active_threads = 0;
 	
 	size_t listen_socks_len = 2;
-	if (!datum_sockets_setup_listening_sockets("stratum", datum_config.stratum_v1_listen_addr, app->listen_port, listen_socks, &listen_socks_len)) {
+	if (!datum_sockets_setup_listening_sockets("stratum", datum_config.stratum_v1_listen_addr, app->listen_port, listen_socks, &listen_socks_len, datum_config.stratum_v1_listen_backlog)) {
 		return NULL;
 	}
 	if (listen_socks_len < 2) listen_socks[1] = -1;
