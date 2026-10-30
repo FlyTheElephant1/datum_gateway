@@ -37,13 +37,15 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
-
+#include <unistd.h>
+#include <sys/socket.h>
 #include "datum_conf.h"
 #include "datum_jsonrpc.h"
 #include "datum_pow.h"
 #include "datum_stratum.h"
 #include "datum_stratum_dupes.h"
 #include "datum_utils.h"
+#include "datum_sockets.h"
 
 void stratum_calculate_merkle_branches(T_DATUM_STRATUM_JOB *s);
 int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj);
@@ -834,6 +836,72 @@ static void datum_job_pays_current_pool_tests(void) {
 	datum_config = saved_config;
 }
 
+static void datum_socket_write_list_tests(void) {
+	T_DATUM_THREAD_DATA * const thread = calloc(1, sizeof(*thread));
+	datum_test(thread != NULL);
+	if (!thread) return;
+
+	/* A client with queued output is noted once. */
+	datum_socket_note_pending_write(thread, 5);
+	datum_test(thread->pending_writes == 1);
+	datum_test(thread->write_list[0] == 5);
+
+	/* Noting it again does not duplicate. */
+	datum_socket_note_pending_write(thread, 5);
+	datum_test(thread->pending_writes == 1);
+
+	/* A second client is added. */
+	datum_socket_note_pending_write(thread, 2);
+	datum_test(thread->pending_writes == 2);
+	datum_test(thread->write_list[1] == 2);
+
+	/* Dropping the first removes it and keeps the second. */
+	datum_socket_drop_pending_write(thread, 5);
+	datum_test(thread->pending_writes == 1);
+	datum_test(thread->write_list[0] == 2);
+
+	/* Dropping a client that was never noted is a no-op. */
+	datum_socket_drop_pending_write(thread, 9);
+	datum_test(thread->pending_writes == 1);
+
+	/* Close one client mid-pass; the other still receives. */
+	int sp[2][2];
+	char buf[16];
+	if (socketpair(AF_UNIX, SOCK_STREAM, 0, sp[0]) == 0 &&
+	    socketpair(AF_UNIX, SOCK_STREAM, 0, sp[1]) == 0) {
+		T_DATUM_SOCKET_APP app = { .max_clients_thread = MAX_CLIENTS_THREAD };
+		thread->app = &app;
+		thread->client_data[0].fd = sp[0][1];
+		thread->client_data[0].cid = 0;
+		thread->client_data[0].datum_thread = thread;
+		thread->client_data[1].fd = sp[1][1];
+		thread->client_data[1].cid = 1;
+		thread->client_data[1].datum_thread = thread;
+		thread->pending_writes = 0;
+		thread->client_data[2].write_queued = false;
+
+		datum_socket_send_chars_to_client(&thread->client_data[0], "AAA", 3);
+		datum_socket_send_chars_to_client(&thread->client_data[1], "BBB", 3);
+		datum_test(thread->pending_writes == 2);
+
+		close(sp[0][1]);
+		thread->client_data[0].fd = 0;
+
+		datum_socket_flush_writes(thread);
+
+		memset(buf, 0, sizeof(buf));
+		ssize_t nr = read(sp[1][0], buf, sizeof(buf));
+		datum_test(nr == 3 && memcmp(buf, "BBB", 3) == 0);
+		datum_test(thread->pending_writes == 0);
+
+		close(sp[0][0]);
+		close(sp[1][0]);
+		close(sp[1][1]);
+	}
+
+	free(thread);
+}
+
 void datum_stratum_tests(void) {
 	datum_stratum_holds_job_tests();
 	datum_stratum_loop_holds_job_tests();
@@ -852,4 +920,5 @@ void datum_stratum_tests(void) {
 	datum_stratum_abw_block_request_tests();
 	datum_blake2b_refresh_time_offset_tests();
 	datum_block_coinbase_witness_tests();
+	datum_socket_write_list_tests();
 }
