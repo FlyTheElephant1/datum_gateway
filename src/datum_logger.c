@@ -47,10 +47,12 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <sys/eventfd.h>
 #include <sys/time.h>
 #include <inttypes.h>
 #include <stdbool.h>
 #include <pthread.h>
+#include <poll.h>
 #include <errno.h>
 
 #include "datum_logger.h"
@@ -85,6 +87,8 @@ uint64_t dlog_queue_version[2] = { 0, 10 };
 
 int msg_buf_idx[2] = { 0, 0 };
 char *msg_buffer[2] = { NULL, NULL };
+
+static int logger_wake_fd = -1;
 
 static inline enum datum_loglevel datum_logger_clamp_loglevel(int level) {
 	if (level < 0) return 0;
@@ -234,6 +238,11 @@ int datum_logger_queue_msg(const char *func, enum datum_loglevel level, const ch
 	msg_buf_idx[buffer_id] += i+2; // increment the index
 	dlog_queue_next[buffer_id]++; // bounds check is above, since we can potentially delay to wait for the writer instead of failing here
 	pthread_rwlock_unlock(&dlog_buffer_rwlock[buffer_id]);
+	
+	if (logger_wake_fd >= 0) {
+		uint64_t one = 1;
+		(void)write(logger_wake_fd, &one, sizeof(one));
+	}
 	
 	return 0;
 }
@@ -410,15 +419,12 @@ void * datum_logger_thread(void *ptr) {
 			ets = 0;
 		}
 		
-		if (ets < 56999) {
-			j = (57000 - ets) / 1000;
-			j++;
-			for(i=0;i<j;i++) {
-				if (panic_mode) {
-					i = j;
-				} else {
-					usleep(1000);
-				}
+		if (!panic_mode && logger_wake_fd >= 0) {
+			uint64_t n;
+			struct pollfd pfd = { .fd = logger_wake_fd, .events = POLLIN };
+			int pr = poll(&pfd, 1, 57);
+			if (pr > 0 && (pfd.revents & POLLIN)) {
+				(void)read(logger_wake_fd, &n, sizeof(n));
 			}
 		}
 	}
@@ -463,6 +469,12 @@ int datum_logger_init(void) {
 			DLOG(DLOG_LEVEL_FATAL, "Could not open log file (%s): %s!", log_file, strerror(errno));
 			return -1;
 		}
+	}
+	
+	logger_wake_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+	if (logger_wake_fd < 0) {
+		DLOG_ERROR("eventfd for logger failed: %s", strerror(errno));
+		return -1;
 	}
 	
 	const int result = datum_thread_create(&pthread_datum_logger_thread, datum_logger_thread, log_handle);
