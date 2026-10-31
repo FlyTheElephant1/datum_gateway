@@ -2064,6 +2064,10 @@ int datum_protocol_coinbaser_fetch(void *sptr) {
 	}
 
 	for (;;) {
+                if (session_generation != atomic_load(&datum_session_generation)) {
+                    pthread_mutex_unlock(&datum_protocol_coinbaser_fetch_mutex);
+                    return 0;
+                }
 		if (datum_coinbaser_v2_response &&
 		    datum_coinbaser_v2_response_value[datum_coinbaser_v2_response_buf_idx] == value) {
 			datum_last_req_unanswered = false;
@@ -2116,7 +2120,9 @@ int datum_protocol_coinbaser_fetch(void *sptr) {
 	}
 
 	i = 0;
-	if ((datum_coinbaser_v2_response) && (datum_coinbaser_v2_response_value[datum_coinbaser_v2_response_buf_idx] == value)) {
+	if (session_generation == atomic_load(&datum_session_generation) &&
+            (datum_coinbaser_v2_response) &&
+            (datum_coinbaser_v2_response_value[datum_coinbaser_v2_response_buf_idx] == value)) {
 		i = datum_coinbaser_v2_parse(s, datum_coinbaser_v2_response, datum_coinbaser_v2_response_len[datum_coinbaser_v2_response_buf_idx]);
 		if (i >= 2) {
 			datum_protocol_coinbaser_save_good(s, i);
