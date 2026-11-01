@@ -41,6 +41,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <sys/wait.h>
 
 #include "datum_blocktemplates.h"
 #include "datum_coinbaser.h"
@@ -2195,6 +2196,75 @@ static int datum_prev_test_fetch(T_DATUM_STRATUM_JOB *job, bool answer, uint64_t
 
 #define DATUM_PREV_TEST_UNREAD (-1)
 
+
+/* CENTCOM_SESSION_RACE_TEST: audit-only regression. */
+static void *centcom_session_race_responder(void *arg) {
+    (void)arg;
+    usleep(50000);
+    atomic_fetch_add(&datum_session_generation, 1);
+    datum_test(datum_protocol_coinbaser_fetch_response(
+        datum_prev_test_resp_len, datum_prev_test_resp) == 1);
+    return NULL;
+}
+
+static void centcom_session_race_test(void) {
+    const uint64_t saved_gen = atomic_load(&datum_session_generation);
+    const int saved_active = atomic_load(&datum_protocol_client_active);
+    const bool saved_reuse = datum_config.datum_coinbaser_reuse;
+    const unsigned char fills[2] = {0x50, 0x51};
+    static T_DATUM_STRATUM_JOB job;
+    pthread_t responder;
+
+    memset(&job, 0, sizeof(job));
+    memset(job.prevhash_bin, 0xa5, 32);
+    job.coinbase_value = 310000000;
+    job.is_datum_job = true;
+
+    datum_config.datum_coinbaser_reuse = false;
+    atomic_store(&datum_protocol_client_active, 3);
+    datum_prev_test_answer(job.coinbase_value, fills, 2);
+
+    datum_test(!pthread_create(
+        &responder, NULL, centcom_session_race_responder, NULL));
+
+    int result = datum_protocol_coinbaser_fetch(&job);
+    pthread_join(responder, NULL);
+
+    /* Reject responses belonging to an invalidated session. */
+    datum_test(result == 0);
+
+    fprintf(stderr,
+        "CENTCOM_SESSION_RACE result=%d outputs=%d generation_changed=%d\n",
+        result, job.available_coinbase_outputs_count,
+        atomic_load(&datum_session_generation) != saved_gen);
+
+    atomic_store(&datum_session_generation, saved_gen);
+    atomic_store(&datum_protocol_client_active, saved_active);
+    datum_config.datum_coinbaser_reuse = saved_reuse;
+}
+
+
+/* Run the session-race regression without leaking request state
+ * into other DATUM protocol tests. */
+static void centcom_session_race_isolated_test(void) {
+    const pid_t child = fork();
+
+    if (!datum_test(child >= 0)) return;
+
+    if (child == 0) {
+        const unsigned int failures_before = datum_test_failed;
+
+        centcom_session_race_test();
+
+        _exit(datum_test_failed != failures_before);
+    }
+
+    int status;
+    if (datum_test(waitpid(child, &status, 0) == child)) {
+        datum_test(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    }
+}
+
 static void datum_coinbaser_prev_block_fetch_tests(void) {
 	const bool saved_reuse = datum_config.datum_coinbaser_reuse;
 	datum_config.datum_coinbaser_reuse = true;
@@ -2722,6 +2792,7 @@ static void datum_coinbaser_prev_block_tests(void) {
 }
 
 void datum_protocol_tests(void) {
+	centcom_session_race_isolated_test();
 	datum_protocol_hello_framing_offer_tests();
 	datum_protocol_receive_mode_tests();
 	datum_protocol_handshake_bounds_tests();
