@@ -70,6 +70,8 @@
 /* Offered only when coinbaser_reuse and coinbaser_reuse_abw are both on.
  * A 0x08 ack is ignored unless 0x04 is acked too. */
 #define DATUM_DRS_ABW_SCALED_REUSE_FLAG 0x08
+/* Gateway solos itself; pool should not push a solo script. */
+#define DATUM_DRS_SELF_SOLO_FLAG 0x10
 
 // Protocol command 6 carries sequential DBF1 fragments. Only one small
 // fragment is admitted after the primary send queue drains.

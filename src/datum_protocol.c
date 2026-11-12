@@ -3081,6 +3081,9 @@ int datum_protocol_send_hello(int sockfd) {
 	if (datum_config.datum_coinbaser_reuse && datum_config.datum_coinbaser_reuse_abw) {
 		drs_flags |= DATUM_DRS_ABW_SCALED_REUSE_FLAG;
 	}
+	if (datum_config.datum_self_solo) {
+		drs_flags |= DATUM_DRS_SELF_SOLO_FLAG;
+	}
 	hello_msg[i++] = drs_flags;
 	if (datum_requested_resume) {
 		memcpy(&hello_msg[i], datum_resume_token, DATUM_RESUME_TOKEN_SIZE);

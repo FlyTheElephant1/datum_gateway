@@ -206,6 +206,9 @@ const T_DATUM_CONFIG_ITEM datum_config_options[] = {
 	{ .var_type = DATUM_CONF_BOOL, 		.category = "datum", 		.name = "coinbaser_reuse_abw",		.description = "Offer the ABW stretch bit in the hello, and only when coinbaser_reuse is also on. Default off. Startup fails if this is on and coinbaser_reuse is off. The gateway stretches on ABW only when the pool acks this bit and scaled reuse. A 0x08 ack without a 0x04 ack is ignored.",
 		.example_default = false,
 		.required = false, .ptr = &datum_config.datum_coinbaser_reuse_abw, 	.default_bool = false },
+	{ .var_type = DATUM_CONF_BOOL, 		.category = "datum", 		.name = "self_solo",			.description = "Tell the pool in the hello that this gateway solos itself and does not want the pool to push a solo script. Default on. A pool that does not know the flag ignores it.",
+		.example_default = true,
+		.required = false, .ptr = &datum_config.datum_self_solo, 	.default_bool = true },
 	{ .var_type = DATUM_CONF_INT, 		.category = "datum", 		.name = "protocol_global_timeout",		.description = "If no valid messages are received from the DATUM server in this many seconds, give up and try to reconnect",
 		.required = false, .ptr = &datum_config.datum_protocol_global_timeout, 	.default_int = 60 },
 };
