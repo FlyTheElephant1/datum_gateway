@@ -62,12 +62,16 @@ atomic_int notify_othercause = 0;
 static pthread_mutex_t new_notify_lock = PTHREAD_MUTEX_INITIALIZER;
 volatile char new_notify_blockhash[256] = { 0 };
 volatile int new_notify_height = 0;
+static const char *new_notify_source = NULL;
+static bool new_notify_bare = true;
 
 void datum_blocktemplates_notifynew_sighandler() {
 	new_notify = 1;
 }
 
-void datum_blocktemplates_notifynew(const char * const prevhash, const int height) {
+void datum_blocktemplates_notifynew(const char * const prevhash, const int height, const char *source) {
+	new_notify_source = source ? source : "unknown";
+	new_notify_bare = !(prevhash && prevhash[0]);
 	if (prevhash && *prevhash) pthread_mutex_lock(&new_notify_lock);
 	new_notify_threadsafe = 1;
 	if (prevhash) {
@@ -428,7 +432,7 @@ void *datum_gateway_fallback_notifier(void *args) {
 						} else {
 							if (strcmp(s, p1) != 0) {
 								// new block?!?!?!
-								datum_blocktemplates_notifynew(s,0);
+								datum_blocktemplates_notifynew(s, 0, "fallback");
 								strncpy(p1,s,70);
 							}
 						}
@@ -552,8 +556,11 @@ void *datum_gateway_template_thread(void *args) {
 						// use this template to setup for a coinbaser wait job while the empty + full w/blank jobs are blasted
 						// then this job will get blasted when its ready.
 						i = datum_stratum_v1_global_subscriber_count();
-						DLOG_INFO("Updating priority stratum job for block %lu: %.8f BTC, %lu txns, %lu bytes (Sent to %llu stratum client%s)", (unsigned long)t->height, (double)t->coinbasevalue / (double)100000000.0, (unsigned long)t->txn_count, (unsigned long)t->txn_total_size, (unsigned long long)i, (i!=1)?"s":"");
 						update_stratum_job(t,false,JOB_STATE_FULL_PRIORITY_WAIT_COINBASER);
+						{
+							const T_DATUM_STRATUM_JOB *pj = global_cur_stratum_jobs[global_latest_stratum_job_index];
+							DLOG_INFO("Updating priority %s job: %.8f BTC,%4lu txns,%7lu bytes, %llu client%s (%lu)", datum_stratum_work_kind(pj), (double)t->coinbasevalue / (double)100000000.0, (unsigned long)t->txn_count, (unsigned long)t->txn_total_size, (unsigned long long)i, (i!=1)?"s":"", (unsigned long)t->height);
+						}
 					} else {
 						if (was_notified) {
 							// we got a notification of a new block, but there doesn't seem to actually be a new block.
@@ -616,9 +623,12 @@ void *datum_gateway_template_thread(void *args) {
 							pthread_mutex_unlock(&new_notify_lock);
 						} else {
 							i = datum_stratum_v1_global_subscriber_count();
-							DLOG_INFO("Updating standard stratum job for block %lu: %.8f BTC, %lu txns, %lu bytes (Sent to %llu stratum client%s)", (unsigned long)t->height, (double)t->coinbasevalue / (double)100000000.0, (unsigned long)t->txn_count, (unsigned long)t->txn_total_size, (unsigned long long)i, (i!=1)?"s":"");
 							const bool refresh = datum_blocktemplates_take_refresh();
 							update_stratum_job(t,false,refresh ? JOB_STATE_FULL_PRIORITY_WAIT_COINBASER : JOB_STATE_FULL_NORMAL_WAIT_COINBASER);
+							{
+								const T_DATUM_STRATUM_JOB *sj = global_cur_stratum_jobs[global_latest_stratum_job_index];
+								DLOG_INFO("Updating standard %s job: %.8f BTC,%4lu txns,%7lu bytes, %llu client%s (%lu)", datum_stratum_work_kind(sj), (double)t->coinbasevalue / (double)100000000.0, (unsigned long)t->txn_count, (unsigned long)t->txn_total_size, (unsigned long long)i, (i!=1)?"s":"", (unsigned long)t->height);
+							}
 						}
 					}
 				}
@@ -638,7 +648,14 @@ void *datum_gateway_template_thread(void *args) {
 					new_notify_threadsafe = 0;
 					was_notified = 1;
 					wnc = 0;
-					DLOG_INFO("NEW NETWORK BLOCK NOTIFICATION RECEIVED");
+					if (new_notify_bare) {
+						DLOG_INFO("NEW NETWORK BLOCK NOTIFICATION (bare, %s)",
+							new_notify_source ? new_notify_source : "unknown");
+					} else {
+						DLOG_INFO("NEW NETWORK BLOCK NOTIFICATION (full, %s): %s (%d)",
+							new_notify_source ? new_notify_source : "unknown",
+							new_notify_blockhash, new_notify_height);
+					}
 					break;
 				}
 			}

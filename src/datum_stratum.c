@@ -338,7 +338,10 @@ void *datum_stratum_v1_socket_server(void *arg) {
 			if (stratum_latest_empty_complete_count >= app->datum_active_threads) {
 				// we are done!
 				stratum_latest_empty_ready_for_full = true;
-				DLOG_INFO("Empty work send completed. Sent to %llu clients across %llu threads", (unsigned long long)stratum_latest_empty_sent_count, (unsigned long long)stratum_latest_empty_complete_count);
+				{
+					const T_DATUM_STRATUM_JOB *ej = (stratum_latest_empty_job_index < MAX_STRATUM_JOBS) ? global_cur_stratum_jobs[stratum_latest_empty_job_index] : NULL;
+					DLOG_INFO("Empty work %s send completed. Sent to %llu clients across %llu threads", datum_stratum_work_kind(ej), (unsigned long long)stratum_latest_empty_sent_count, (unsigned long long)stratum_latest_empty_complete_count);
+				}
 				/* The threadpool threads check this flag inside their job loop.
 				 * Without a wake they sit in epoll_wait until the 1000ms timeout. */
 				for (int tid = 0; tid < app->max_threads; ++tid) {
@@ -1345,7 +1348,7 @@ int client_mining_submit(T_DATUM_CLIENT_DATA *c, uint64_t id, json_t *params_obj
 			full_cb_txn_size, job, m->sdata, new_notify_blockhash,
 			empty_work, extranonce_bin);
 		if (i) {
-			datum_blocktemplates_notifynew(new_notify_blockhash, job->height + 1);
+			datum_blocktemplates_notifynew(new_notify_blockhash, job->height + 1, "stratum");
 		}
 	}
 	
@@ -1542,6 +1545,15 @@ unsigned int datum_stratum_coinbase_index(
 	    !sdata->full_coinbase_ready ||
 	    miner->coinbase_selection >= MAX_COINBASE_TYPES) return 0;
 	return miner->coinbase_selection;
+}
+
+const char *datum_stratum_work_kind(const T_DATUM_STRATUM_JOB *s) {
+	if (!s) return "local";
+	if (s->fallback_next_script) return "fallback";
+	if (s->solo_while_connected) return "solo";
+	if (s->provisional_split) return "stretch";
+	if (s->is_datum_job) return "pool";
+	return "local";
 }
 
 bool datum_stratum_notify_replaces_job(int job_state, bool opening_job_still_current) {
