@@ -670,7 +670,7 @@ void *datum_gateway_template_thread(void *args) {
 		
 		// fetch latest template
 		snprintf(gbt_req, sizeof(gbt_req), "{\"method\":\"getblocktemplate\",\"params\":[{\"rules\":[\"segwit\",\"blake2b\"]}],\"id\":%"PRIu64"}",(uint64_t)((uint64_t)time(NULL)<<(uint64_t)8)|(uint64_t)(i&255));
-		gbt = bitcoind_json_rpc_call(tcurl, &datum_config, gbt_req);
+		gbt = bitcoind_json_rpc_call_cached(tcurl, &datum_config, gbt_req);
 		
 		if (!gbt) {
 			datum_blocktemplates_error = "Could not fetch new template!";
